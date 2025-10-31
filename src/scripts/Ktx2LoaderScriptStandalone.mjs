@@ -47,7 +47,7 @@ export class Ktx2LoaderScript extends Script {
 
     try {
       // Dynamic import of the loader module
-      const loaderModule = await import('./ktx2-loader/Ktx2ProgressiveLoader.js');
+      const loaderModule = await import('./ktx2-loader/Ktx2ProgressiveLoader.mjs');
       const Ktx2ProgressiveLoader = loaderModule.Ktx2ProgressiveLoader;
 
       // Create loader instance
@@ -63,10 +63,23 @@ export class Ktx2LoaderScript extends Script {
       });
 
       // Find libktx assets
+      if (this.verbose) {
+        console.log('[KTX2] Searching for libktx assets...');
+      }
+
       const libktxMjsAsset = this.app.assets.find('libktx.mjs', 'script');
-      const libktxWasmAsset = this.app.assets.find('libktx.wasm', 'binary');
+      // PlayCanvas определяет .wasm файлы как тип 'wasm', а не 'binary'
+      let libktxWasmAsset = this.app.assets.find('libktx.wasm', 'wasm');
+
+      // Fallback: попробовать найти как binary на случай если тип изменён вручную
+      if (!libktxWasmAsset) {
+        libktxWasmAsset = this.app.assets.find('libktx.wasm', 'binary');
+      }
 
       if (!libktxMjsAsset || !libktxWasmAsset) {
+        console.error('[KTX2] libktx.mjs found:', !!libktxMjsAsset);
+        console.error('[KTX2] libktx.wasm found:', !!libktxWasmAsset);
+        console.error('[KTX2] Available asset types:', [...new Set(this.app.assets.list().map(a => a.type))]);
         throw new Error(
           'libktx assets not found! Please upload libktx.mjs and libktx.wasm to PlayCanvas Assets.'
         );

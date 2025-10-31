@@ -7,7 +7,7 @@
       "DOM",
       "ES2020"
     ],
-    "outDir": "./build/esm",
+    "outDir": "./build/esm-temp",
     "rootDir": "./src",
     "strict": true,
     "strictPropertyInitialization": false,
@@ -17,13 +17,13 @@
     "inlineSources": true,
     "experimentalDecorators": true,
     "forceConsistentCasingInFileNames": true,
-    "declaration": true,
-    "declarationMap": true
+    "declaration": false
   },
   "include": [
     "src/**/*"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "src/index.ts"
   ]
 }
