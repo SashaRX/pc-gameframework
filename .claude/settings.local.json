@@ -4,7 +4,8 @@
       "WebFetch(domain:registry.khronos.org)",
       "Bash(npm run build:debug:*)",
       "WebFetch(domain:developer.playcanvas.com)",
-      "Bash(npm run build:esm:*)"
+      "Bash(npm run build:esm:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []
