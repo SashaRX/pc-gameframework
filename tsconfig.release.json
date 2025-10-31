@@ -7,7 +7,7 @@
       "DOM",
       "ES2017"
     ],
-    "outFile": "./build/main.build.js",
+    "outFile": "./build/main.bundle.js",
     "rootDir": "./src",
     "strict": true,
     "strictPropertyInitialization": false, 

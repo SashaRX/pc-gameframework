@@ -347,11 +347,16 @@ export class Ktx2ProgressiveLoader {
     }
 
     try {
-      // Dynamic import of libktx.mjs
-      const modulePath = libktxModuleUrl || '../lib/libktx.mjs';
+      // Fetch and evaluate libktx.mjs as a script
+      // This works in AMD/PlayCanvas environment
+      const scriptUrl = libktxModuleUrl;
 
-      // Import the module factory
-      const createKtxModule = (await import(/* @vite-ignore */ modulePath)).default;
+      if (!scriptUrl) {
+        throw new Error('libktxModuleUrl is required. Pass app.assets.find("libktx.mjs").getFileUrl()');
+      }
+
+      // Load the script and get the factory function
+      const createKtxModule = await this.loadLibktxScript(scriptUrl);
 
       // Initialize the module
       const moduleConfig: any = {};
@@ -394,6 +399,54 @@ export class Ktx2ProgressiveLoader {
       console.error('[KTX2] Failed to load libktx module:', error);
       throw error;
     }
+  }
+
+  /**
+   * Load libktx.mjs script dynamically
+   * Works in AMD/PlayCanvas environment
+   */
+  private async loadLibktxScript(url: string): Promise<any> {
+    return new Promise((resolve, reject) => {
+      // Fetch the script text
+      fetch(url)
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`Failed to fetch ${url}: ${response.status}`);
+          }
+          return response.text();
+        })
+        .then(scriptText => {
+          // Remove export statement to make it work in global scope
+          // libktx.mjs exports: export default Module;
+          const modifiedScript = scriptText.replace(/export\s+default\s+(\w+);?/g, 'window.libktxModule = $1;');
+
+          // Create and execute script
+          const script = document.createElement('script');
+          script.textContent = modifiedScript;
+
+          script.onload = () => {
+            const createModule = (window as any).libktxModule;
+            if (!createModule) {
+              reject(new Error('libktxModule not found in window after script load'));
+              return;
+            }
+
+            // Cleanup
+            delete (window as any).libktxModule;
+            script.remove();
+
+            resolve(createModule);
+          };
+
+          script.onerror = () => {
+            reject(new Error(`Failed to load libktx script from ${url}`));
+            script.remove();
+          };
+
+          document.head.appendChild(script);
+        })
+        .catch(reject);
+    });
   }
 
   /**
