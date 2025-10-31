@@ -18,17 +18,19 @@
     "typings"
   ],
   "main": "build/main.bundle.js",
-  "scripts": {
-    "build:debug": "tsc --project tsconfig.debug.json",
-    "build:release": "tsc --project tsconfig.release.json",
-    "watch:debug": "tsc --watch --project tsconfig.debug.json",
-    "watch:release": "tsc --watch --project tsconfig.release.json",
-    "push": "node node_modules/playcanvas-sync/bin/pcsync.js pushAll --yes",
-    "build-push:debug": "npm run build:debug && npm run push",
-    "build-push:release": "npm run build:release && npm run push",
-    "watch-push:debug": "npm run build:debug && tsc-watch -p tsconfig.debug.json --onSuccess \"npm run push\"",
-    "watch-push:release": "npm run build:release && tsc-watch -p tsconfig.release.json --onSuccess \"npm run push\""
-  },
+	"scripts": {
+	  "build": "npm run build:release",
+	  "build:debug": "tsc --project tsconfig.debug.json",
+	  "build:release": "tsc --project tsconfig.release.json",
+	  "watch": "npm run watch:debug",
+	  "watch:debug": "tsc --watch --project tsconfig.debug.json",
+	  "watch:release": "tsc --watch --project tsconfig.release.json",
+	  "push": "node node_modules/playcanvas-sync/bin/pcsync.js pushAll --yes",
+	  "build-push:debug": "npm run build:debug && npm run push",
+	  "build-push:release": "npm run build:release && npm run push",
+	  "watch-push:debug": "npm run build:debug && tsc-watch -p tsconfig.debug.json --onSuccess \"npm run push\"",
+	  "watch-push:release": "npm run build:release && tsc-watch -p tsconfig.release.json --onSuccess \"npm run push\""
+	},
   "license": "MIT",
   "devDependencies": {
     "playcanvas": "^1.73.5",
