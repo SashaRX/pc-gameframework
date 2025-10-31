@@ -25,7 +25,7 @@
 	  "build:debug": "npm run build:amd",
 	  "build:release": "tsc --project tsconfig.release.json && npm run copy-libs",
 	  "copy-libs": "node -e \"const fs = require('fs'); fs.mkdirSync('build/esm', {recursive: true}); fs.copyFileSync('lib/libktx.mjs', 'build/libktx.mjs'); fs.copyFileSync('lib/libktx.wasm', 'build/libktx.wasm'); fs.copyFileSync('lib/libktx.mjs', 'build/esm/libktx.mjs'); fs.copyFileSync('lib/libktx.wasm', 'build/esm/libktx.wasm'); console.log('✅ Copied libktx files to build/')\"",
-	  "copy-esm-script": "node -e \"const fs = require('fs'); fs.copyFileSync('src/scripts/Ktx2LoaderScriptESM.mjs', 'build/esm/Ktx2LoaderScript.mjs'); console.log('✅ Copied ESM script')\"",
+	  "copy-esm-script": "node -e \"const fs = require('fs'); fs.copyFileSync('src/scripts/Ktx2LoaderScriptStandalone.mjs', 'build/esm/Ktx2LoaderScript.mjs'); console.log('✅ Copied ESM script')\"",
 	  "watch": "npm run watch:esm",
 	  "watch:esm": "tsc --watch --project tsconfig.esm.json",
 	  "watch:amd": "tsc --watch --project tsconfig.debug.json",

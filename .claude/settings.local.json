@@ -5,7 +5,11 @@
       "Bash(npm run build:debug:*)",
       "WebFetch(domain:developer.playcanvas.com)",
       "Bash(npm run build:esm:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(npm run push:*)",
+      "Bash(node node_modules/playcanvas-sync/bin/pcsync.js push:*)",
+      "Bash(node:*)",
+      "Bash(npm run build-push:esm:*)"
     ],
     "deny": [],
     "ask": []
