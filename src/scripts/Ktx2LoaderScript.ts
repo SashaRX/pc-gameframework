@@ -177,4 +177,5 @@ Ktx2LoaderScript.attributes.add('stepDelayMs', {
   description: 'Delay between loading steps',
 });
 
+export { Ktx2LoaderScript };
 export default Ktx2LoaderScript;

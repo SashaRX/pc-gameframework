@@ -14,6 +14,7 @@ import type {
   Ktx2LoaderConfig,
   Ktx2ProbeResult,
   Ktx2TranscodeResult,
+  Ktx2LevelInfo,
   OnProgressCallback,
   OnCompleteCallback,
   LoadStats,
@@ -337,28 +338,512 @@ export class Ktx2ProgressiveLoader {
     return false;
   }
 
+  /**
+   * Initialize libktx module on main thread (fallback when worker is disabled)
+   */
   private async initMainThreadModule(libktxModuleUrl?: string, libktxWasmUrl?: string): Promise<void> {
-    // TODO: Implement main thread module loading
+    if (this.config.verbose) {
+      console.log('[KTX2] Loading libktx module on main thread...');
+    }
+
+    try {
+      // Dynamic import of libktx.mjs
+      const modulePath = libktxModuleUrl || '../lib/libktx.mjs';
+
+      // Import the module factory
+      const createKtxModule = (await import(/* @vite-ignore */ modulePath)).default;
+
+      // Initialize the module
+      const moduleConfig: any = {};
+      if (libktxWasmUrl) {
+        moduleConfig.locateFile = (filename: string) => {
+          if (filename.endsWith('.wasm')) {
+            return libktxWasmUrl;
+          }
+          return filename;
+        };
+      }
+
+      this.ktxModule = await createKtxModule(moduleConfig);
+
+      if (!this.ktxModule) {
+        throw new Error('Failed to create KTX module');
+      }
+
+      // Create API wrappers
+      const module = this.ktxModule;
+      this.ktxApi = {
+        malloc: module.cwrap('malloc', 'number', ['number']) as (size: number) => number,
+        free: module.cwrap('free', null, ['number']) as (ptr: number) => void,
+        createFromMemory: module.cwrap('ktxTexture_CreateFromMemory', 'number', ['number', 'number', 'number', 'number']) as (data: number, size: number, flags: number, outPtr: number) => number,
+        destroy: module.cwrap('ktxTexture_Destroy', null, ['number']) as (texPtr: number) => void,
+        transcode: module.cwrap('ktxTexture2_TranscodeBasis', 'number', ['number', 'number', 'number']) as (texPtr: number, format: number, flags: number) => number,
+        needsTranscoding: module.cwrap('ktxTexture2_NeedsTranscoding', 'number', ['number']) as (texPtr: number) => number,
+        getData: module.cwrap('ktxTexture_GetData', 'number', ['number']) as (texPtr: number) => number,
+        getDataSize: module.cwrap('ktxTexture_GetDataSize', 'number', ['number']) as (texPtr: number) => number,
+        getWidth: module.cwrap('ktxTexture_GetBaseWidth', 'number', ['number']) as (texPtr: number) => number,
+        getHeight: module.cwrap('ktxTexture_GetBaseHeight', 'number', ['number']) as (texPtr: number) => number,
+        errorString: (code: number) => `Error code: ${code}`,
+        HEAPU8: module.HEAPU8,
+      };
+
+      if (this.config.verbose) {
+        console.log('[KTX2] libktx module loaded successfully');
+      }
+    } catch (error) {
+      console.error('[KTX2] Failed to load libktx module:', error);
+      throw error;
+    }
   }
 
+  /**
+   * Probe KTX2 file: fetch header, parse metadata, determine range support
+   */
   private async probe(url: string): Promise<Ktx2ProbeResult> {
-    // TODO: Implement probe
-    throw new Error('probe() not implemented yet');
+    if (this.config.verbose) {
+      console.log('[KTX2] Probing:', url);
+    }
+
+    // Step 1: HEAD request to get file size and check range support
+    let totalSize = 0;
+    let supportsRanges = false;
+
+    try {
+      const headResponse = await fetch(url, { method: 'HEAD' });
+
+      if (!headResponse.ok) {
+        throw new Error(`HEAD request failed: ${headResponse.status} ${headResponse.statusText}`);
+      }
+
+      // Get file size
+      const contentLength = headResponse.headers.get('Content-Length');
+      if (contentLength) {
+        totalSize = parseInt(contentLength, 10);
+      }
+
+      // Check range support
+      const acceptRanges = headResponse.headers.get('Accept-Ranges');
+      supportsRanges = acceptRanges === 'bytes';
+
+      if (this.config.verbose) {
+        console.log('[KTX2] HEAD response:', {
+          fileSize: `${(totalSize / 1024 / 1024).toFixed(2)} MB`,
+          supportsRanges,
+        });
+      }
+    } catch (error) {
+      console.warn('[KTX2] HEAD request failed, will try GET:', error);
+    }
+
+    // Step 2: Fetch header (80 bytes) + estimate for level index
+    // We'll fetch 4KB to be safe (covers header + many mip levels)
+    const initialFetchSize = 4096;
+    const headerBytes = await this.fetchRange(url, 0, initialFetchSize - 1);
+
+    // Step 3: Parse KTX2 header
+    const view = new DataView(headerBytes.buffer, headerBytes.byteOffset);
+
+    // Validate identifier
+    const identifier = new Uint8Array(headerBytes.buffer, headerBytes.byteOffset, 12);
+    const expectedIdentifier = new Uint8Array([
+      0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A
+    ]);
+
+    for (let i = 0; i < 12; i++) {
+      if (identifier[i] !== expectedIdentifier[i]) {
+        throw new Error(`Invalid KTX2 identifier at byte ${i}: expected ${expectedIdentifier[i]}, got ${identifier[i]}`);
+      }
+    }
+
+    // Parse header fields (all uint32 except sgd which is uint64)
+    const vkFormat = view.getUint32(12, true);
+    const typeSize = view.getUint32(16, true);
+    const pixelWidth = view.getUint32(20, true);
+    const pixelHeight = view.getUint32(24, true);
+    const pixelDepth = view.getUint32(28, true);
+    const layerCount = view.getUint32(32, true);
+    const faceCount = view.getUint32(36, true);
+    const levelCount = view.getUint32(40, true);
+    const supercompressionScheme = view.getUint32(44, true);
+
+    // Parse descriptor offsets/lengths
+    const dfdOff = view.getUint32(48, true);
+    const dfdLen = view.getUint32(52, true);
+    const kvdOff = view.getUint32(56, true);
+    const kvdLen = view.getUint32(60, true);
+    const sgdOff = readU64asNumber(view, 64);
+    const sgdLen = readU64asNumber(view, 72);
+
+    // Step 4: Parse level index (starts at byte 80)
+    const levelIndexSize = Math.max(1, levelCount) * 24; // 24 bytes per level
+    const levels: Ktx2LevelInfo[] = [];
+
+    for (let i = 0; i < levelCount; i++) {
+      const offset = 80 + i * 24;
+      const byteOffset = readU64asNumber(view, offset);
+      const byteLength = readU64asNumber(view, offset + 8);
+      const uncompressedByteLength = readU64asNumber(view, offset + 16);
+
+      levels.push({
+        byteOffset,
+        byteLength,
+        uncompressedByteLength,
+      });
+    }
+
+    // Step 5: Fetch DFD (Data Format Descriptor) to get color space
+    const dfd = dfdLen > 0 ? await this.fetchRange(url, dfdOff, dfdOff + dfdLen - 1) : new Uint8Array(0);
+    const colorSpace = parseDFDColorSpace(dfd, this.config.verbose);
+
+    // Step 6: Fetch KVD and SGD if needed (for now we just allocate empty)
+    const kvd = kvdLen > 0 ? await this.fetchRange(url, kvdOff, kvdOff + kvdLen - 1) : new Uint8Array(0);
+    const sgd = sgdLen > 0 ? await this.fetchRange(url, sgdOff, sgdOff + sgdLen - 1) : new Uint8Array(0);
+
+    // Update total size if we didn't get it from HEAD
+    if (totalSize === 0 && levels.length > 0) {
+      const lastLevel = levels[levels.length - 1];
+      totalSize = lastLevel.byteOffset + lastLevel.byteLength;
+    }
+
+    const result: Ktx2ProbeResult = {
+      url,
+      totalSize,
+      supportsRanges,
+      headerSize: 80 + levelIndexSize,
+      headerBytes: new Uint8Array(headerBytes.buffer, headerBytes.byteOffset, 80 + levelIndexSize),
+      levelCount,
+      layerCount,
+      faceCount,
+      pixelDepth,
+      levelIndexSize,
+      levels,
+      dfd,
+      kvd,
+      sgd,
+      dfdOff,
+      dfdLen,
+      kvdOff,
+      kvdLen,
+      sgdOff,
+      sgdLen,
+      width: pixelWidth,
+      height: pixelHeight,
+      colorSpace,
+    };
+
+    if (this.config.verbose) {
+      console.log('[KTX2] Probe complete:', {
+        size: `${pixelWidth}x${pixelHeight}`,
+        levels: levelCount,
+        fileSize: `${(totalSize / 1024 / 1024).toFixed(2)} MB`,
+        colorSpace: colorSpace.isSrgb ? 'sRGB' : 'Linear',
+        supportsRanges,
+      });
+    }
+
+    return result;
   }
 
+  /**
+   * Fetch a byte range from URL
+   * Uses Range header if supported, falls back to full GET
+   */
   private async fetchRange(url: string, start: number, end: number): Promise<Uint8Array> {
-    // TODO: Implement range fetch
-    throw new Error('fetchRange() not implemented yet');
+    try {
+      // Try range request first
+      const response = await fetch(url, {
+        headers: {
+          'Range': `bytes=${start}-${end}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Fetch failed: ${response.status} ${response.statusText}`);
+      }
+
+      // Check if server supports ranges (206 Partial Content)
+      if (response.status === 206) {
+        const arrayBuffer = await response.arrayBuffer();
+        return new Uint8Array(arrayBuffer);
+      }
+
+      // Server returned 200 (full content) - extract the range we need
+      if (response.status === 200) {
+        const arrayBuffer = await response.arrayBuffer();
+        const fullData = new Uint8Array(arrayBuffer);
+
+        // Return the requested slice
+        return fullData.slice(start, end + 1);
+      }
+
+      throw new Error(`Unexpected response status: ${response.status}`);
+    } catch (error) {
+      // Fallback: fetch entire file and slice
+      if (this.config.verbose) {
+        console.warn(`[KTX2] Range request failed (${start}-${end}), falling back to full fetch:`, error);
+      }
+
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Fallback fetch failed: ${response.status} ${response.statusText}`);
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      const fullData = new Uint8Array(arrayBuffer);
+
+      return fullData.slice(start, end + 1);
+    }
   }
 
+  /**
+   * Repack a single mipmap level into a valid mini-KTX2 file
+   * This creates a minimal KTX2 file containing just one level that libktx can transcode
+   *
+   * Structure:
+   * 1. KTX2 Header (80 bytes) - modified to show levelCount=1
+   * 2. Level Index (24 bytes) - single entry pointing to data
+   * 3. DFD (Data Format Descriptor) - copied from original
+   * 4. KVD (Key-Value Data) - copied from original
+   * 5. SGD (Supercompression Global Data) - copied from original
+   * 6. Mipmap data - the actual payload
+   */
   private repackSingleLevel(probe: Ktx2ProbeResult, level: number, payload: Uint8Array): Uint8Array {
-    // TODO: Implement repack
-    throw new Error('repackSingleLevel() not implemented yet');
+    const levelInfo = probe.levels[level];
+    if (!levelInfo) {
+      throw new Error(`Level ${level} not found in probe result`);
+    }
+
+    // Calculate sizes for the mini-KTX2 file
+    const headerSize = 80;
+    const levelIndexSize = 24; // Single level entry (3 × uint64)
+
+    // Align sections according to KTX2 spec
+    let offset = headerSize + levelIndexSize;
+
+    // DFD offset (must be 4-byte aligned)
+    const dfdOffset = alignValue(offset, 4);
+    const dfdLength = probe.dfd.length;
+    offset = dfdOffset + dfdLength;
+
+    // KVD offset (must be 4-byte aligned)
+    const kvdOffset = alignValue(offset, 4);
+    const kvdLength = probe.kvd.length;
+    offset = kvdOffset + kvdLength;
+
+    // SGD offset (must be 8-byte aligned)
+    const sgdOffset = alignValue(offset, 8);
+    const sgdLength = probe.sgd.length;
+    offset = sgdOffset + sgdLength;
+
+    // Mipmap data offset (must be 8-byte aligned)
+    const dataOffset = alignValue(offset, 8);
+    const dataLength = payload.length;
+
+    // Total mini-KTX2 size
+    const totalSize = dataOffset + dataLength;
+
+    // Create buffer for mini-KTX2
+    const miniKtx = new Uint8Array(totalSize);
+    const view = new DataView(miniKtx.buffer);
+
+    // ========================================================================
+    // 1. Write KTX2 Header (80 bytes)
+    // ========================================================================
+
+    // Identifier (12 bytes)
+    const identifier = new Uint8Array([
+      0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A
+    ]);
+    miniKtx.set(identifier, 0);
+
+    // Copy header fields from probe (or reconstruct from original headerBytes)
+    const origView = new DataView(probe.headerBytes.buffer, probe.headerBytes.byteOffset);
+
+    // Copy vkFormat, typeSize (bytes 12-19)
+    view.setUint32(12, origView.getUint32(12, true), true); // vkFormat
+    view.setUint32(16, origView.getUint32(16, true), true); // typeSize
+
+    // Calculate dimensions for this mip level
+    const mipWidth = Math.max(1, probe.width >> level);
+    const mipHeight = Math.max(1, probe.height >> level);
+
+    view.setUint32(20, mipWidth, true);  // pixelWidth
+    view.setUint32(24, mipHeight, true); // pixelHeight
+    view.setUint32(28, origView.getUint32(28, true), true); // pixelDepth
+    view.setUint32(32, origView.getUint32(32, true), true); // layerCount
+    view.setUint32(36, origView.getUint32(36, true), true); // faceCount
+    view.setUint32(40, 1, true); // levelCount = 1 (THIS IS KEY!)
+    view.setUint32(44, origView.getUint32(44, true), true); // supercompressionScheme
+
+    // Write descriptor offsets/lengths
+    view.setUint32(48, dfdOffset, true); // dfdByteOffset
+    view.setUint32(52, dfdLength, true); // dfdByteLength
+    view.setUint32(56, kvdOffset, true); // kvdByteOffset
+    view.setUint32(60, kvdLength, true); // kvdByteLength
+    writeU64(view, 64, sgdOffset);       // sgdByteOffset (uint64)
+    writeU64(view, 72, sgdLength);       // sgdByteLength (uint64)
+
+    // ========================================================================
+    // 2. Write Level Index (24 bytes) - single entry
+    // ========================================================================
+
+    const levelIndexOffset = 80;
+    writeU64(view, levelIndexOffset, dataOffset);                         // byteOffset
+    writeU64(view, levelIndexOffset + 8, dataLength);                     // byteLength
+    writeU64(view, levelIndexOffset + 16, levelInfo.uncompressedByteLength); // uncompressedByteLength
+
+    // ========================================================================
+    // 3. Write DFD (Data Format Descriptor)
+    // ========================================================================
+
+    if (dfdLength > 0) {
+      miniKtx.set(probe.dfd, dfdOffset);
+    }
+
+    // ========================================================================
+    // 4. Write KVD (Key-Value Data)
+    // ========================================================================
+
+    if (kvdLength > 0) {
+      miniKtx.set(probe.kvd, kvdOffset);
+    }
+
+    // ========================================================================
+    // 5. Write SGD (Supercompression Global Data)
+    // ========================================================================
+
+    if (sgdLength > 0) {
+      miniKtx.set(probe.sgd, sgdOffset);
+    }
+
+    // ========================================================================
+    // 6. Write Mipmap Data
+    // ========================================================================
+
+    miniKtx.set(payload, dataOffset);
+
+    if (this.config.verbose) {
+      console.log(`[KTX2] Repacked level ${level}:`, {
+        originalSize: `${(levelInfo.byteLength / 1024).toFixed(2)} KB`,
+        miniKtxSize: `${(totalSize / 1024).toFixed(2)} KB`,
+        dimensions: `${mipWidth}x${mipHeight}`,
+        overhead: `${((totalSize - dataLength) / 1024).toFixed(2)} KB`,
+      });
+    }
+
+    return miniKtx;
   }
 
+  /**
+   * Transcode mini-KTX2 to RGBA using libktx
+   * Routes to worker if available, otherwise uses main thread
+   */
   private async transcode(miniKtx: Uint8Array): Promise<Ktx2TranscodeResult> {
-    // TODO: Implement transcode routing
-    throw new Error('transcode() not implemented yet');
+    // For now, use main thread (worker implementation is TODO)
+    if (!this.ktxApi || !this.ktxModule) {
+      throw new Error('libktx not initialized. Call initialize() first.');
+    }
+
+    return this.transcodeMainThread(miniKtx);
+  }
+
+  /**
+   * Transcode on main thread using libktx
+   */
+  private transcodeMainThread(miniKtx: Uint8Array): Ktx2TranscodeResult {
+    if (!this.ktxApi || !this.ktxModule) {
+      throw new Error('libktx not initialized');
+    }
+
+    const heapBefore = this.ktxModule.HEAPU8.length;
+
+    // Allocate memory for the mini-KTX2 data
+    const dataPtr = this.ktxApi.malloc(miniKtx.byteLength);
+    if (!dataPtr) {
+      throw new Error('Failed to allocate memory for KTX2 data');
+    }
+
+    try {
+      // Copy mini-KTX2 data to WASM heap
+      this.ktxModule.HEAPU8.set(miniKtx, dataPtr);
+
+      // Create texture from memory
+      const texPtrPtr = this.ktxApi.malloc(4); // Pointer to pointer
+      const createFlags = 0; // KTX_TEXTURE_CREATE_NO_FLAGS
+
+      const createResult = this.ktxApi.createFromMemory(
+        dataPtr,
+        miniKtx.byteLength,
+        createFlags,
+        texPtrPtr
+      );
+
+      if (createResult !== 0) {
+        throw new Error(`ktxTexture_CreateFromMemory failed: ${this.ktxApi.errorString(createResult)}`);
+      }
+
+      // Get texture pointer
+      const texPtr = this.ktxModule.getValue(texPtrPtr, 'i32');
+      this.ktxApi.free(texPtrPtr);
+
+      if (!texPtr) {
+        throw new Error('Failed to get texture pointer');
+      }
+
+      // Check if transcoding is needed
+      const needsTranscoding = this.ktxApi.needsTranscoding(texPtr);
+
+      if (needsTranscoding) {
+        // Transcode to RGBA32 (format 13 in libktx)
+        const RGBA32_FORMAT = 13;
+        const transcodeFlags = 0;
+
+        const transcodeResult = this.ktxApi.transcode(texPtr, RGBA32_FORMAT, transcodeFlags);
+
+        if (transcodeResult !== 0) {
+          this.ktxApi.destroy(texPtr);
+          throw new Error(`ktxTexture2_TranscodeBasis failed: ${this.ktxApi.errorString(transcodeResult)}`);
+        }
+      }
+
+      // Get transcoded data
+      const dataSize = this.ktxApi.getDataSize(texPtr);
+      const dataOffset = this.ktxApi.getData(texPtr);
+      const width = this.ktxApi.getWidth(texPtr);
+      const height = this.ktxApi.getHeight(texPtr);
+
+      if (!dataSize || !dataOffset) {
+        this.ktxApi.destroy(texPtr);
+        throw new Error('Failed to get texture data');
+      }
+
+      // Copy data from WASM heap
+      const rgbaData = new Uint8Array(dataSize);
+      rgbaData.set(this.ktxModule.HEAPU8.subarray(dataOffset, dataOffset + dataSize));
+
+      // Cleanup
+      this.ktxApi.destroy(texPtr);
+      this.ktxApi.free(dataPtr);
+
+      const heapAfter = this.ktxModule.HEAPU8.length;
+      const heapFreed = Math.max(0, heapBefore - heapAfter);
+
+      return {
+        width,
+        height,
+        data: rgbaData,
+        heapStats: {
+          before: heapBefore,
+          after: heapAfter,
+          freed: heapFreed,
+        },
+      };
+
+    } catch (error) {
+      // Cleanup on error
+      this.ktxApi.free(dataPtr);
+      throw error;
+    }
   }
 
   private createTexture(probe: Ktx2ProbeResult): pc.Texture {
@@ -378,10 +863,76 @@ export class Ktx2ProgressiveLoader {
     return texture;
   }
 
+  /**
+   * Upload RGBA mipmap data to GPU texture
+   */
   private uploadMipLevel(texture: pc.Texture, level: number, result: Ktx2TranscodeResult): void {
-    // TODO: Implement GPU upload
-    if (this.config.verbose) {
-      console.log(`[KTX2] Uploading level ${level} to GPU: ${result.width}x${result.height}`);
+    if (!result.data || result.data.length === 0) {
+      console.error(`[KTX2] Cannot upload level ${level}: empty data`);
+      return;
+    }
+
+    try {
+      // Upload to GPU using PlayCanvas Texture API
+      // setSource() expects: ArrayBufferView, width, height, format
+
+      if (level === 0) {
+        // For the first level, we can use setSource which replaces the entire texture
+        // setSource accepts (source, width, height) or just (source)
+        (texture as any).setSource?.(result.data);
+
+        // Alternative: directly upload via lock/unlock
+        const pixels = texture.lock();
+        if (pixels) {
+          pixels.set(result.data);
+          texture.unlock();
+        }
+      } else {
+        // For subsequent levels, we need to upload to the specific mip level
+        // PlayCanvas doesn't have a direct API for this, so we use the underlying WebGL
+        const device = this.app.graphicsDevice;
+        const gl = (device as any).gl as WebGLRenderingContext | WebGL2RenderingContext | null;
+
+        if (!gl) {
+          console.error('[KTX2] WebGL context not available');
+          return;
+        }
+
+        // Bind the texture
+        const webglTexture = (texture as any)._glTexture;
+        if (!webglTexture) {
+          console.error('[KTX2] WebGL texture not found');
+          return;
+        }
+
+        gl.bindTexture(gl.TEXTURE_2D, webglTexture);
+
+        // Upload the mipmap level
+        // texImage2D(target, level, internalformat, width, height, border, format, type, pixels)
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          level,
+          gl.RGBA,
+          result.width,
+          result.height,
+          0,
+          gl.RGBA,
+          gl.UNSIGNED_BYTE,
+          result.data
+        );
+
+        // Unbind
+        gl.bindTexture(gl.TEXTURE_2D, null);
+      }
+
+      if (this.config.verbose) {
+        console.log(
+          `[KTX2] Uploaded level ${level} to GPU: ${result.width}x${result.height} ` +
+          `(${(result.data.byteLength / 1024).toFixed(2)} KB)`
+        );
+      }
+    } catch (error) {
+      console.error(`[KTX2] Failed to upload level ${level}:`, error);
     }
   }
 
@@ -396,9 +947,127 @@ export class Ktx2ProgressiveLoader {
     }
   }
 
+  /**
+   * Calculate which mipmap level to start loading from based on screen size
+   *
+   * Algorithm:
+   * 1. Get entity's bounding box (AABB)
+   * 2. Project to screen space using camera
+   * 3. Calculate screen size in pixels
+   * 4. Find mipmap level where resolution >= screen size * margin
+   *
+   * @param entity Entity with model component
+   * @param baseW Base texture width (mip level 0)
+   * @param baseH Base texture height (mip level 0)
+   * @param levelCount Total number of mipmap levels
+   * @returns Starting mipmap level index (0 = highest res, levelCount-1 = lowest res)
+   */
   private calculateStartLevel(entity: pc.Entity, baseW: number, baseH: number, levelCount: number): number {
-    // TODO: Implement adaptive start level calculation
-    return levelCount - 1;
+    try {
+      // Get the camera
+      const cameraSystem = this.app.systems.camera;
+      if (!cameraSystem || !cameraSystem.cameras || cameraSystem.cameras.length === 0) {
+        if (this.config.verbose) {
+          console.warn('[KTX2] No camera found, starting from lowest res');
+        }
+        return levelCount - 1;
+      }
+
+      const camera = cameraSystem.cameras[0];
+      if (!camera || !camera.camera) {
+        return levelCount - 1;
+      }
+
+      // Get entity's bounding box
+      const model = entity.model;
+      if (!model || !model.meshInstances || model.meshInstances.length === 0) {
+        if (this.config.verbose) {
+          console.warn('[KTX2] Entity has no mesh instances, starting from lowest res');
+        }
+        return levelCount - 1;
+      }
+
+      const meshInstance = model.meshInstances[0];
+      const aabb = meshInstance.aabb;
+
+      if (!aabb) {
+        if (this.config.verbose) {
+          console.warn('[KTX2] No AABB found, starting from lowest res');
+        }
+        return levelCount - 1;
+      }
+
+      // Get AABB corners in world space
+      const worldMin = aabb.getMin();
+      const worldMax = aabb.getMax();
+
+      // Calculate screen size in pixels
+      const device = this.app.graphicsDevice;
+      const screenWidth = device.width;
+      const screenHeight = device.height;
+
+      // Project AABB to screen space
+      // worldToScreen(worldCoord, cameraWidth, cameraHeight) returns Vec3
+      const screenMin = camera.camera.worldToScreen(worldMin, screenWidth, screenHeight);
+      const screenMax = camera.camera.worldToScreen(worldMax, screenWidth, screenHeight);
+
+      if (!screenMin || !screenMax) {
+        if (this.config.verbose) {
+          console.warn('[KTX2] Failed to project to screen space, starting from lowest res');
+        }
+        return levelCount - 1;
+      }
+
+      // Convert normalized coords to pixels and get bounds
+      const minX = Math.min(screenMin.x, screenMax.x) * screenWidth;
+      const maxX = Math.max(screenMin.x, screenMax.x) * screenWidth;
+      const minY = Math.min(screenMin.y, screenMax.y) * screenHeight;
+      const maxY = Math.max(screenMin.y, screenMax.y) * screenHeight;
+
+      const screenSizeX = Math.abs(maxX - minX);
+      const screenSizeY = Math.abs(maxY - minY);
+
+      // Use the larger dimension
+      const targetScreenSize = Math.max(screenSizeX, screenSizeY);
+
+      if (this.config.verbose) {
+        console.log('[KTX2] Adaptive calculation:', {
+          screenSize: `${screenSizeX.toFixed(0)}x${screenSizeY.toFixed(0)} px`,
+          targetSize: `${targetScreenSize.toFixed(0)} px`,
+          baseTextureSize: `${baseW}x${baseH}`,
+        });
+      }
+
+      // Find the appropriate mipmap level
+      // Level 0 = full resolution (baseW × baseH)
+      // Level 1 = baseW/2 × baseH/2
+      // etc.
+
+      // Start from lowest res and work up
+      for (let level = levelCount - 1; level >= 0; level--) {
+        const mipWidth = Math.max(1, baseW >> level);
+        const mipHeight = Math.max(1, baseH >> level);
+        const mipSize = Math.max(mipWidth, mipHeight);
+
+        // If this mip is >= target size * margin, use it
+        if (mipSize >= targetScreenSize * this.config.adaptiveMargin) {
+          if (this.config.verbose) {
+            console.log(`[KTX2] Starting from level ${level} (${mipWidth}x${mipHeight})`);
+          }
+          return level;
+        }
+      }
+
+      // If we get here, even the highest res isn't enough, so start from level 0
+      if (this.config.verbose) {
+        console.log('[KTX2] Starting from highest res (level 0)');
+      }
+      return 0;
+
+    } catch (error) {
+      console.error('[KTX2] Error calculating start level:', error);
+      return levelCount - 1;
+    }
   }
 }
 
