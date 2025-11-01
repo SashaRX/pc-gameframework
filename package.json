@@ -18,31 +18,35 @@
     "typings"
   ],
   "main": "build/main.bundle.js",
-	"scripts": {
-	  "build": "npm run build:esm",
-	  "build:amd": "tsc --project tsconfig.debug.json && npm run copy-libs",
-	  "build:esm": "tsc --project tsconfig.esm.json && npm run rename-to-mjs && npm run copy-libs && npm run copy-esm-script",
-	  "rename-to-mjs": "node scripts/rename-to-mjs.js",
-	  "build:debug": "npm run build:amd",
-	  "build:release": "tsc --project tsconfig.release.json && npm run copy-libs",
-	  "copy-libs": "node -e \"const fs = require('fs'); fs.mkdirSync('build/esm', {recursive: true}); fs.copyFileSync('lib/libktx.mjs', 'build/libktx.mjs'); fs.copyFileSync('lib/libktx.wasm', 'build/libktx.wasm'); fs.copyFileSync('lib/libktx.mjs', 'build/esm/libktx.mjs'); fs.copyFileSync('lib/libktx.wasm', 'build/esm/libktx.wasm'); console.log('✅ Copied libktx files to build/')\"",
-	  "copy-esm-script": "node -e \"const fs = require('fs'); fs.copyFileSync('src/scripts/Ktx2LoaderScriptStandalone.mjs', 'build/esm/Ktx2LoaderScript.mjs'); console.log('✅ Copied ESM script')\"",
-	  "watch": "npm run watch:esm",
-	  "watch:esm": "tsc --watch --project tsconfig.esm.json",
-	  "watch:amd": "tsc --watch --project tsconfig.debug.json",
-	  "push": "node node_modules/playcanvas-sync/bin/pcsync.js pushAll --yes",
-	  "build-push:esm": "npm run build:esm && npm run push",
-	  "build-push:amd": "npm run build:amd && npm run push",
-	  "watch-push:esm": "npm run build:esm && tsc-watch -p tsconfig.esm.json --onSuccess \"npm run push\"",
-	  "watch-push:amd": "npm run build:amd && tsc-watch -p tsconfig.debug.json --onSuccess \"npm run push\""
-	},
+  "scripts": {
+    "build": "npm run build:esm",
+    "build:amd": "tsc --project tsconfig.debug.json && npm run copy-libs",
+    "build:esm": "tsc --project tsconfig.esm.json && npm run rename-to-mjs && npm run copy-libs && npm run copy-esm-script",
+    "build:clean": "node -e \"const fs = require('fs'); if (fs.existsSync('build')) fs.rmSync('build', {recursive: true}); console.log('✅ Cleaned build/')\" && npm run build:esm",
+    "rename-to-mjs": "node scripts/rename-to-mjs.js",
+    "build:debug": "npm run build:amd",
+    "build:release": "tsc --project tsconfig.release.json && npm run copy-libs",
+    "copy-libs": "node -e \"const fs = require('fs'); const path = require('path'); const libsDir = 'build/esm/libs/libktx'; fs.mkdirSync(libsDir, {recursive: true}); fs.copyFileSync('lib/libktx.mjs', path.join(libsDir, 'libktx.mjs')); fs.copyFileSync('lib/libktx.wasm', path.join(libsDir, 'libktx.wasm')); console.log('✅ Copied libktx files to', libsDir)\"",
+    "copy-esm-script": "node -e \"const fs = require('fs'); const path = require('path'); const scriptDir = 'build/esm/scripts'; fs.mkdirSync(scriptDir, {recursive: true}); fs.copyFileSync('src/scripts/Ktx2LoaderScriptESM.mjs', path.join(scriptDir, 'Ktx2LoaderScript.mjs')); console.log('✅ Copied ESM script to', scriptDir)\"",
+    "watch": "npm run watch:esm",
+    "watch:esm": "tsc --watch --project tsconfig.esm.json",
+    "watch:amd": "tsc --watch --project tsconfig.debug.json",
+    "push": "node scripts/clean-and-push.js",
+    "push:simple": "node scripts/push-with-structure.js",
+    "push:old": "node node_modules/playcanvas-sync/bin/pcsync.js pushAll --yes",
+    "build-push:esm": "npm run build:esm && npm run push",
+    "build-push:clean": "npm run build:clean && npm run push",
+    "build-push:amd": "npm run build:amd && npm run push",
+    "watch-push:esm": "npm run build:esm && tsc-watch -p tsconfig.esm.json --onSuccess \"npm run push\"",
+    "watch-push:amd": "npm run build:amd && tsc-watch -p tsconfig.debug.json --onSuccess \"npm run push\""
+  },
   "license": "MIT",
   "devDependencies": {
-    "playcanvas": "^1.73.5",
+    "playcanvas": "^2.12.4",
     "playcanvas-sync": "git+https://github.com/playcanvas/playcanvas-sync.git",
-    "typescript": "^5.5.4"
+    "typescript": "^5.9.3"
   },
   "dependencies": {
-    "tsc-watch": "^6.2.0"
+    "tsc-watch": "^7.2.0"
   }
 }

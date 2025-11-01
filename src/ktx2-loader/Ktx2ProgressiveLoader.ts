@@ -344,6 +344,8 @@ export class Ktx2ProgressiveLoader {
   private async initMainThreadModule(libktxModuleUrl?: string, libktxWasmUrl?: string): Promise<void> {
     if (this.config.verbose) {
       console.log('[KTX2] Loading libktx module on main thread...');
+      console.log('[KTX2] Module URL:', libktxModuleUrl);
+      console.log('[KTX2] WASM URL:', libktxWasmUrl);
     }
 
     try {
@@ -356,17 +358,35 @@ export class Ktx2ProgressiveLoader {
       }
 
       // Load the script and get the factory function
+      if (this.config.verbose) {
+        console.log('[KTX2] Loading libktx script from:', scriptUrl);
+      }
+
       const createKtxModule = await this.loadLibktxScript(scriptUrl);
+
+      if (this.config.verbose) {
+        console.log('[KTX2] Script loaded, creating module instance...');
+      }
 
       // Initialize the module
       const moduleConfig: any = {};
       if (libktxWasmUrl) {
         moduleConfig.locateFile = (filename: string) => {
+          if (this.config.verbose) {
+            console.log('[KTX2] locateFile called for:', filename);
+          }
           if (filename.endsWith('.wasm')) {
+            if (this.config.verbose) {
+              console.log('[KTX2] Returning WASM URL:', libktxWasmUrl);
+            }
             return libktxWasmUrl;
           }
           return filename;
         };
+      }
+
+      if (this.config.verbose) {
+        console.log('[KTX2] Initializing WASM module...');
       }
 
       this.ktxModule = await createKtxModule(moduleConfig);
@@ -375,22 +395,54 @@ export class Ktx2ProgressiveLoader {
         throw new Error('Failed to create KTX module');
       }
 
+      if (this.config.verbose) {
+        console.log('[KTX2] WASM module created, checking available methods...');
+        console.log('[KTX2] Module has cwrap:', typeof this.ktxModule.cwrap);
+        console.log('[KTX2] Module has HEAPU8:', typeof this.ktxModule.HEAPU8);
+      }
+
+      // Wait for module to be fully ready
+      // Emscripten modules may need time to initialize
+      if (!this.ktxModule.cwrap) {
+        if (this.config.verbose) {
+          console.log('[KTX2] Module not ready, waiting for initialization...');
+        }
+        // If module is a promise, wait for it
+        if (typeof (this.ktxModule as any).then === 'function') {
+          this.ktxModule = await (this.ktxModule as any);
+        }
+      }
+
+      if (this.config.verbose) {
+        console.log('[KTX2] Module ready, creating API wrappers...');
+      }
+
       // Create API wrappers
       const module = this.ktxModule;
+
+      if (!module || !module.cwrap) {
+        throw new Error('Module does not have cwrap - WASM not initialized properly');
+      }
+
       this.ktxApi = {
-        malloc: module.cwrap('malloc', 'number', ['number']) as (size: number) => number,
-        free: module.cwrap('free', null, ['number']) as (ptr: number) => void,
-        createFromMemory: module.cwrap('ktxTexture_CreateFromMemory', 'number', ['number', 'number', 'number', 'number']) as (data: number, size: number, flags: number, outPtr: number) => number,
-        destroy: module.cwrap('ktxTexture_Destroy', null, ['number']) as (texPtr: number) => void,
-        transcode: module.cwrap('ktxTexture2_TranscodeBasis', 'number', ['number', 'number', 'number']) as (texPtr: number, format: number, flags: number) => number,
-        needsTranscoding: module.cwrap('ktxTexture2_NeedsTranscoding', 'number', ['number']) as (texPtr: number) => number,
-        getData: module.cwrap('ktxTexture_GetData', 'number', ['number']) as (texPtr: number) => number,
-        getDataSize: module.cwrap('ktxTexture_GetDataSize', 'number', ['number']) as (texPtr: number) => number,
-        getWidth: module.cwrap('ktxTexture_GetBaseWidth', 'number', ['number']) as (texPtr: number) => number,
-        getHeight: module.cwrap('ktxTexture_GetBaseHeight', 'number', ['number']) as (texPtr: number) => number,
+        malloc: module!.cwrap('malloc', 'number', ['number']) as (size: number) => number,
+        free: module!.cwrap('free', null, ['number']) as (ptr: number) => void,
+        createFromMemory: module!.cwrap('ktxTexture_CreateFromMemory', 'number', ['number', 'number', 'number', 'number']) as (data: number, size: number, flags: number, outPtr: number) => number,
+        destroy: module!.cwrap('ktxTexture_Destroy', null, ['number']) as (texPtr: number) => void,
+        transcode: module!.cwrap('ktxTexture2_TranscodeBasis', 'number', ['number', 'number', 'number']) as (texPtr: number, format: number, flags: number) => number,
+        needsTranscoding: module!.cwrap('ktxTexture2_NeedsTranscoding', 'number', ['number']) as (texPtr: number) => number,
+        getData: module!.cwrap('ktxTexture_GetData', 'number', ['number']) as (texPtr: number) => number,
+        getDataSize: module!.cwrap('ktxTexture_GetDataSize', 'number', ['number']) as (texPtr: number) => number,
+        getWidth: module!.cwrap('ktxTexture_GetBaseWidth', 'number', ['number']) as (texPtr: number) => number,
+        getHeight: module!.cwrap('ktxTexture_GetBaseHeight', 'number', ['number']) as (texPtr: number) => number,
         errorString: (code: number) => `Error code: ${code}`,
-        HEAPU8: module.HEAPU8,
+        HEAPU8: module!.HEAPU8,
       };
+
+      if (this.config.verbose) {
+        console.log('[KTX2] API wrappers created successfully');
+        console.log('[KTX2] createFromMemory type:', typeof this.ktxApi.createFromMemory);
+      }
 
       if (this.config.verbose) {
         console.log('[KTX2] libktx module loaded successfully');
@@ -402,51 +454,42 @@ export class Ktx2ProgressiveLoader {
   }
 
   /**
-   * Load libktx.mjs script dynamically
-   * Works in AMD/PlayCanvas environment
+   * Load libktx.mjs script dynamically using ES module import
+   * Works in PlayCanvas 2.x ESM environment
    */
   private async loadLibktxScript(url: string): Promise<any> {
-    return new Promise((resolve, reject) => {
-      // Fetch the script text
-      fetch(url)
-        .then(response => {
-          if (!response.ok) {
-            throw new Error(`Failed to fetch ${url}: ${response.status}`);
-          }
-          return response.text();
-        })
-        .then(scriptText => {
-          // Remove export statement to make it work in global scope
-          // libktx.mjs exports: export default Module;
-          const modifiedScript = scriptText.replace(/export\s+default\s+(\w+);?/g, 'window.libktxModule = $1;');
+    if (this.config.verbose) {
+      console.log('[KTX2] Importing libktx module via dynamic import...');
+    }
 
-          // Create and execute script
-          const script = document.createElement('script');
-          script.textContent = modifiedScript;
+    try {
+      // Use dynamic import to load the ESM module
+      // This properly handles import.meta and other ESM features
+      const module = await import(/* webpackIgnore: true */ url);
 
-          script.onload = () => {
-            const createModule = (window as any).libktxModule;
-            if (!createModule) {
-              reject(new Error('libktxModule not found in window after script load'));
-              return;
-            }
+      if (this.config.verbose) {
+        console.log('[KTX2] Module imported successfully');
+        console.log('[KTX2] Module exports:', Object.keys(module));
+      }
 
-            // Cleanup
-            delete (window as any).libktxModule;
-            script.remove();
+      // Get the default export (the factory function)
+      const createModule = module.default || module;
 
-            resolve(createModule);
-          };
+      if (!createModule) {
+        throw new Error('No default export found in libktx module');
+      }
 
-          script.onerror = () => {
-            reject(new Error(`Failed to load libktx script from ${url}`));
-            script.remove();
-          };
+      if (this.config.verbose) {
+        console.log('[KTX2] Got module factory function');
+      }
 
-          document.head.appendChild(script);
-        })
-        .catch(reject);
-    });
+      return createModule;
+    } catch (error) {
+      if (this.config.verbose) {
+        console.error('[KTX2] Error importing libktx module:', error);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -900,10 +943,18 @@ export class Ktx2ProgressiveLoader {
   }
 
   private createTexture(probe: Ktx2ProbeResult): pc.Texture {
+    // Determine pixel format based on colorspace
+    // In PlayCanvas 2.x, color textures (diffuse, albedo, etc) should use sRGB formats
+    // Linear formats are used for data textures (normal maps, roughness, etc)
+    const useSrgb = this.config.isSrgb || probe.colorSpace?.isSrgb;
+    // Note: Using numeric constants directly as the named exports may not be available
+    // PIXELFORMAT_RGBA8 = 7, PIXELFORMAT_SRGBA8 = 20
+    const format = useSrgb ? 20 : 7;
+
     const texture = new pc.Texture(this.app.graphicsDevice, {
       width: probe.width,
       height: probe.height,
-      format: pc.PIXELFORMAT_RGBA8,
+      format: format,
       mipmaps: true,
       minFilter: pc.FILTER_LINEAR_MIPMAP_LINEAR,
       magFilter: pc.FILTER_LINEAR,
@@ -912,12 +963,19 @@ export class Ktx2ProgressiveLoader {
     });
 
     texture.name = `ktx2_${probe.url.split('/').pop()}`;
-    
+
+    if (this.config.verbose) {
+      console.log(`[KTX2] Created texture with format: ${useSrgb ? 'SRGBA8' : 'RGBA8'}`);
+    }
+
     return texture;
   }
 
   /**
    * Upload RGBA mipmap data to GPU texture
+   *
+   * Note: This uses WebGL2 API directly for mipmap levels > 0
+   * PlayCanvas 2.x supports WebGL2 only (WebGL1 support was removed in v2.0)
    */
   private uploadMipLevel(texture: pc.Texture, level: number, result: Ktx2TranscodeResult): void {
     if (!result.data || result.data.length === 0) {
@@ -927,27 +985,21 @@ export class Ktx2ProgressiveLoader {
 
     try {
       // Upload to GPU using PlayCanvas Texture API
-      // setSource() expects: ArrayBufferView, width, height, format
-
       if (level === 0) {
-        // For the first level, we can use setSource which replaces the entire texture
-        // setSource accepts (source, width, height) or just (source)
-        (texture as any).setSource?.(result.data);
-
-        // Alternative: directly upload via lock/unlock
+        // For the first level, use PlayCanvas API
         const pixels = texture.lock();
         if (pixels) {
           pixels.set(result.data);
           texture.unlock();
         }
       } else {
-        // For subsequent levels, we need to upload to the specific mip level
-        // PlayCanvas doesn't have a direct API for this, so we use the underlying WebGL
+        // For subsequent mip levels, we need to use WebGL2 directly
+        // PlayCanvas doesn't expose a high-level API for uploading specific mip levels
         const device = this.app.graphicsDevice;
-        const gl = (device as any).gl as WebGLRenderingContext | WebGL2RenderingContext | null;
+        const gl = (device as any).gl as WebGL2RenderingContext | null;
 
         if (!gl) {
-          console.error('[KTX2] WebGL context not available');
+          console.error('[KTX2] WebGL2 context not available');
           return;
         }
 
@@ -960,16 +1012,21 @@ export class Ktx2ProgressiveLoader {
 
         gl.bindTexture(gl.TEXTURE_2D, webglTexture);
 
+        // Determine internal format based on texture format
+        // PlayCanvas 2.x requires correct sRGB internal formats
+        const useSrgb = this.config.isSrgb;
+        const internalFormat = useSrgb ? gl.SRGB8_ALPHA8 : gl.RGBA8;
+
         // Upload the mipmap level
         // texImage2D(target, level, internalformat, width, height, border, format, type, pixels)
         gl.texImage2D(
           gl.TEXTURE_2D,
           level,
-          gl.RGBA,
+          internalFormat,
           result.width,
           result.height,
           0,
-          gl.RGBA,
+          gl.RGBA,  // format (always RGBA for source data)
           gl.UNSIGNED_BYTE,
           result.data
         );
@@ -991,7 +1048,7 @@ export class Ktx2ProgressiveLoader {
 
   private applyTextureToEntity(entity: pc.Entity, texture: pc.Texture): void {
     const model = entity.model;
-    if (model && model.meshInstances.length > 0) {
+    if (model && model.meshInstances && model.meshInstances.length > 0) {
       const material = model.meshInstances[0].material as pc.StandardMaterial;
       if (material) {
         material.diffuseMap = texture;

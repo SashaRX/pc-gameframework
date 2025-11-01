@@ -37,7 +37,7 @@ class Ktx2LoaderScript extends pc.ScriptType {
 
 	async initialize() {
 	  if (this.verbose) {
-		console.log('[Ktx2LoaderScript] Initializing...');
+		console.log('[KTX2] Script initializing...');
 	  }
 
 	  // Создаём loader
@@ -53,14 +53,43 @@ class Ktx2LoaderScript extends pc.ScriptType {
 	  });
 
 	  try {
-		// Инициализация (загрузка libktx)
-		const libktxMjsUrl = this.app.assets.find('libktx.mjs')?.getFileUrl() || undefined;
-		const libktxWasmUrl = this.app.assets.find('libktx.wasm')?.getFileUrl() || undefined;
-		
+		// Find libktx assets with proper type checking
+		if (this.verbose) {
+		  console.log('[KTX2] Searching for libktx assets...');
+		}
+
+		const libktxMjsAsset = this.app.assets.find('libktx.mjs', 'script');
+		// PlayCanvas определяет .wasm файлы как тип 'wasm', а не 'binary'
+		let libktxWasmAsset = this.app.assets.find('libktx.wasm', 'wasm');
+
+		// Fallback: попробовать найти как binary на случай если тип изменён вручную
+		if (!libktxWasmAsset) {
+		  libktxWasmAsset = this.app.assets.find('libktx.wasm', 'binary');
+		}
+
+		if (!libktxMjsAsset || !libktxWasmAsset) {
+		  console.error('[KTX2] libktx.mjs found:', !!libktxMjsAsset);
+		  console.error('[KTX2] libktx.wasm found:', !!libktxWasmAsset);
+		  console.error('[KTX2] Available asset types:', [...new Set(this.app.assets.list().map(a => a.type))]);
+		  throw new Error(
+			'libktx assets not found! Please upload libktx.mjs and libktx.wasm to PlayCanvas Assets.'
+		  );
+		}
+
+		const libktxMjsUrl = libktxMjsAsset.getFileUrl() || undefined;
+		const libktxWasmUrl = libktxWasmAsset.getFileUrl() || undefined;
+
+		if (this.verbose) {
+		  console.log('[KTX2] Asset URLs:');
+		  console.log('  - libktx.mjs:', libktxMjsUrl);
+		  console.log('  - libktx.wasm:', libktxWasmUrl);
+		  console.log('[KTX2] Initializing loader...');
+		}
+
 		await this.loader.initialize(libktxMjsUrl, libktxWasmUrl);
 
 		if (this.verbose) {
-		  console.log('[Ktx2LoaderScript] Loader initialized');
+		  console.log('[KTX2] Loader initialized successfully');
 		}
 
 		// Загрузка текстуры
