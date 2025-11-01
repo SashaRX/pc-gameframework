@@ -38,11 +38,11 @@
   },
   "license": "MIT",
   "devDependencies": {
-    "playcanvas": "^2.12.3",
+    "playcanvas": "^2.12.4",
     "playcanvas-sync": "git+https://github.com/playcanvas/playcanvas-sync.git",
-    "typescript": "^5.5.4"
+    "typescript": "^5.9.3"
   },
   "dependencies": {
-    "tsc-watch": "^6.2.0"
+    "tsc-watch": "^7.2.0"
   }
 }
