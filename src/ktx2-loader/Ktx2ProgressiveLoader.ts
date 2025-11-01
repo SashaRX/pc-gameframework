@@ -344,6 +344,8 @@ export class Ktx2ProgressiveLoader {
   private async initMainThreadModule(libktxModuleUrl?: string, libktxWasmUrl?: string): Promise<void> {
     if (this.config.verbose) {
       console.log('[KTX2] Loading libktx module on main thread...');
+      console.log('[KTX2] Module URL:', libktxModuleUrl);
+      console.log('[KTX2] WASM URL:', libktxWasmUrl);
     }
 
     try {
@@ -358,6 +360,10 @@ export class Ktx2ProgressiveLoader {
       // Load the script and get the factory function
       const createKtxModule = await this.loadLibktxScript(scriptUrl);
 
+      if (this.config.verbose) {
+        console.log('[KTX2] Script loaded, initializing module...');
+      }
+
       // Initialize the module
       const moduleConfig: any = {};
       if (libktxWasmUrl) {
@@ -369,7 +375,15 @@ export class Ktx2ProgressiveLoader {
         };
       }
 
+      if (this.config.verbose) {
+        console.log('[KTX2] Calling createKtxModule with config:', moduleConfig);
+      }
+
       this.ktxModule = await createKtxModule(moduleConfig);
+
+      if (this.config.verbose) {
+        console.log('[KTX2] Module created successfully');
+      }
 
       if (!this.ktxModule) {
         throw new Error('Failed to create KTX module');
@@ -403,49 +417,54 @@ export class Ktx2ProgressiveLoader {
 
   /**
    * Load libktx.mjs script dynamically
-   * Works in AMD/PlayCanvas environment
+   * libktx creates global LIBKTX variable, not ES module
    */
   private async loadLibktxScript(url: string): Promise<any> {
+    if (this.config.verbose) {
+      console.log('[KTX2] Loading libktx script from:', url);
+    }
+
     return new Promise((resolve, reject) => {
-      // Fetch the script text
-      fetch(url)
-        .then(response => {
-          if (!response.ok) {
-            throw new Error(`Failed to fetch ${url}: ${response.status}`);
+      // Create script tag to load libktx
+      const script = document.createElement('script');
+      script.src = url;
+      // NO type="module" - we need global scope!
+
+      script.onload = () => {
+        // Wait a bit for script to execute and create globals
+        setTimeout(() => {
+          if (this.config.verbose) {
+            console.log('[KTX2] Script loaded, checking for LIBKTX global...');
+            console.log('[KTX2] All window keys with "ktx":', Object.keys(window).filter(k => k.toLowerCase().includes('ktx')));
           }
-          return response.text();
-        })
-        .then(scriptText => {
-          // Remove export statement to make it work in global scope
-          // libktx.mjs exports: export default Module;
-          const modifiedScript = scriptText.replace(/export\s+default\s+(\w+);?/g, 'window.libktxModule = $1;');
 
-          // Create and execute script
-          const script = document.createElement('script');
-          script.textContent = modifiedScript;
+          // libktx.mjs creates global LIBKTX or createKtxModule variable
+          const LIBKTX = (window as any).LIBKTX || (window as any).createKtxModule;
 
-          script.onload = () => {
-            const createModule = (window as any).libktxModule;
-            if (!createModule) {
-              reject(new Error('libktxModule not found in window after script load'));
-              return;
-            }
+          if (!LIBKTX) {
+            console.error('[KTX2] LIBKTX not found. Checking other possible names...');
+            console.error('[KTX2] window.Module:', !!(window as any).Module);
+            console.error('[KTX2] window.createKtxModule:', !!(window as any).createKtxModule);
+            reject(new Error('LIBKTX global variable not found after loading libktx.mjs'));
+            return;
+          }
 
-            // Cleanup
-            delete (window as any).libktxModule;
-            script.remove();
+          if (this.config.verbose) {
+            console.log('[KTX2] Found LIBKTX global');
+          }
 
-            resolve(createModule);
-          };
+          script.remove();
+          resolve(LIBKTX);
+        }, 100); // Wait 100ms for script execution
+      };
 
-          script.onerror = () => {
-            reject(new Error(`Failed to load libktx script from ${url}`));
-            script.remove();
-          };
+      script.onerror = (error) => {
+        console.error('[KTX2] Failed to load script:', error);
+        script.remove();
+        reject(new Error(`Failed to load libktx script from ${url}`));
+      };
 
-          document.head.appendChild(script);
-        })
-        .catch(reject);
+      document.head.appendChild(script);
     });
   }
 
