@@ -22,6 +22,7 @@
     "build": "npm run build:esm",
     "build:amd": "tsc --project tsconfig.debug.json && npm run copy-libs",
     "build:esm": "tsc --project tsconfig.esm.json && npm run rename-to-mjs && npm run copy-libs",
+    "build:clean": "node -e \"const fs = require('fs'); if (fs.existsSync('build')) fs.rmSync('build', {recursive: true}); console.log('✅ Cleaned build/')\" && npm run build:esm",
     "rename-to-mjs": "node scripts/rename-to-mjs.js",
     "build:debug": "npm run build:amd",
     "build:release": "tsc --project tsconfig.release.json && npm run copy-libs",
@@ -33,6 +34,7 @@
     "push:simple": "node scripts/push-with-structure.js",
     "push:old": "node node_modules/playcanvas-sync/bin/pcsync.js pushAll --yes",
     "build-push:esm": "npm run build:esm && npm run push",
+    "build-push:clean": "npm run build:clean && npm run push",
     "build-push:amd": "npm run build:amd && npm run push",
     "watch-push:esm": "npm run build:esm && tsc-watch -p tsconfig.esm.json --onSuccess \"npm run push\"",
     "watch-push:amd": "npm run build:amd && tsc-watch -p tsconfig.debug.json --onSuccess \"npm run push\""
