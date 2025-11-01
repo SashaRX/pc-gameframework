@@ -395,22 +395,54 @@ export class Ktx2ProgressiveLoader {
         throw new Error('Failed to create KTX module');
       }
 
+      if (this.config.verbose) {
+        console.log('[KTX2] WASM module created, checking available methods...');
+        console.log('[KTX2] Module has cwrap:', typeof this.ktxModule.cwrap);
+        console.log('[KTX2] Module has HEAPU8:', typeof this.ktxModule.HEAPU8);
+      }
+
+      // Wait for module to be fully ready
+      // Emscripten modules may need time to initialize
+      if (!this.ktxModule.cwrap) {
+        if (this.config.verbose) {
+          console.log('[KTX2] Module not ready, waiting for initialization...');
+        }
+        // If module is a promise, wait for it
+        if (typeof (this.ktxModule as any).then === 'function') {
+          this.ktxModule = await (this.ktxModule as any);
+        }
+      }
+
+      if (this.config.verbose) {
+        console.log('[KTX2] Module ready, creating API wrappers...');
+      }
+
       // Create API wrappers
       const module = this.ktxModule;
+
+      if (!module || !module.cwrap) {
+        throw new Error('Module does not have cwrap - WASM not initialized properly');
+      }
+
       this.ktxApi = {
-        malloc: module.cwrap('malloc', 'number', ['number']) as (size: number) => number,
-        free: module.cwrap('free', null, ['number']) as (ptr: number) => void,
-        createFromMemory: module.cwrap('ktxTexture_CreateFromMemory', 'number', ['number', 'number', 'number', 'number']) as (data: number, size: number, flags: number, outPtr: number) => number,
-        destroy: module.cwrap('ktxTexture_Destroy', null, ['number']) as (texPtr: number) => void,
-        transcode: module.cwrap('ktxTexture2_TranscodeBasis', 'number', ['number', 'number', 'number']) as (texPtr: number, format: number, flags: number) => number,
-        needsTranscoding: module.cwrap('ktxTexture2_NeedsTranscoding', 'number', ['number']) as (texPtr: number) => number,
-        getData: module.cwrap('ktxTexture_GetData', 'number', ['number']) as (texPtr: number) => number,
-        getDataSize: module.cwrap('ktxTexture_GetDataSize', 'number', ['number']) as (texPtr: number) => number,
-        getWidth: module.cwrap('ktxTexture_GetBaseWidth', 'number', ['number']) as (texPtr: number) => number,
-        getHeight: module.cwrap('ktxTexture_GetBaseHeight', 'number', ['number']) as (texPtr: number) => number,
+        malloc: module!.cwrap('malloc', 'number', ['number']) as (size: number) => number,
+        free: module!.cwrap('free', null, ['number']) as (ptr: number) => void,
+        createFromMemory: module!.cwrap('ktxTexture_CreateFromMemory', 'number', ['number', 'number', 'number', 'number']) as (data: number, size: number, flags: number, outPtr: number) => number,
+        destroy: module!.cwrap('ktxTexture_Destroy', null, ['number']) as (texPtr: number) => void,
+        transcode: module!.cwrap('ktxTexture2_TranscodeBasis', 'number', ['number', 'number', 'number']) as (texPtr: number, format: number, flags: number) => number,
+        needsTranscoding: module!.cwrap('ktxTexture2_NeedsTranscoding', 'number', ['number']) as (texPtr: number) => number,
+        getData: module!.cwrap('ktxTexture_GetData', 'number', ['number']) as (texPtr: number) => number,
+        getDataSize: module!.cwrap('ktxTexture_GetDataSize', 'number', ['number']) as (texPtr: number) => number,
+        getWidth: module!.cwrap('ktxTexture_GetBaseWidth', 'number', ['number']) as (texPtr: number) => number,
+        getHeight: module!.cwrap('ktxTexture_GetBaseHeight', 'number', ['number']) as (texPtr: number) => number,
         errorString: (code: number) => `Error code: ${code}`,
-        HEAPU8: module.HEAPU8,
+        HEAPU8: module!.HEAPU8,
       };
+
+      if (this.config.verbose) {
+        console.log('[KTX2] API wrappers created successfully');
+        console.log('[KTX2] createFromMemory type:', typeof this.ktxApi.createFromMemory);
+      }
 
       if (this.config.verbose) {
         console.log('[KTX2] libktx module loaded successfully');
