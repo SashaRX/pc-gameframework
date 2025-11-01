@@ -46,7 +46,8 @@ export class Ktx2LoaderScript extends Script {
 
     try {
       // Dynamic import of the loader module
-      const loaderModule = await import('./ktx2-loader/Ktx2ProgressiveLoader.mjs');
+      // Use ../ to go up from scripts/ folder
+      const loaderModule = await import('../ktx2-loader/Ktx2ProgressiveLoader.mjs');
       const Ktx2ProgressiveLoader = loaderModule.Ktx2ProgressiveLoader;
 
       // Create loader instance
