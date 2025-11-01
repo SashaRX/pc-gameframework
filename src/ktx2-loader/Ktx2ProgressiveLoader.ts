@@ -10,7 +10,6 @@
  */
 
 import * as pc from 'playcanvas';
-import { PIXELFORMAT_SRGBA8, PIXELFORMAT_RGBA8 } from 'playcanvas';
 import type {
   Ktx2LoaderConfig,
   Ktx2ProbeResult,
@@ -905,7 +904,9 @@ export class Ktx2ProgressiveLoader {
     // In PlayCanvas 2.x, color textures (diffuse, albedo, etc) should use sRGB formats
     // Linear formats are used for data textures (normal maps, roughness, etc)
     const useSrgb = this.config.isSrgb || probe.colorSpace?.isSrgb;
-    const format = useSrgb ? PIXELFORMAT_SRGBA8 : PIXELFORMAT_RGBA8;
+    // Note: Using numeric constants directly as the named exports may not be available
+    // PIXELFORMAT_RGBA8 = 7, PIXELFORMAT_SRGBA8 = 20
+    const format = useSrgb ? 20 : 7;
 
     const texture = new pc.Texture(this.app.graphicsDevice, {
       width: probe.width,
