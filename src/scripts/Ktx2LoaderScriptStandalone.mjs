@@ -89,6 +89,9 @@ export class Ktx2LoaderScript extends Script {
       const libktxWasmUrl = libktxWasmAsset.getFileUrl();
 
       if (this.verbose) {
+        console.log('[KTX2] Asset URLs:');
+        console.log('  - libktx.mjs:', libktxMjsUrl);
+        console.log('  - libktx.wasm:', libktxWasmUrl);
         console.log('[KTX2] Initializing loader...');
       }
 

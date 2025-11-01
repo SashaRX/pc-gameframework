@@ -344,6 +344,8 @@ export class Ktx2ProgressiveLoader {
   private async initMainThreadModule(libktxModuleUrl?: string, libktxWasmUrl?: string): Promise<void> {
     if (this.config.verbose) {
       console.log('[KTX2] Loading libktx module on main thread...');
+      console.log('[KTX2] Module URL:', libktxModuleUrl);
+      console.log('[KTX2] WASM URL:', libktxWasmUrl);
     }
 
     try {
@@ -356,17 +358,35 @@ export class Ktx2ProgressiveLoader {
       }
 
       // Load the script and get the factory function
+      if (this.config.verbose) {
+        console.log('[KTX2] Loading libktx script from:', scriptUrl);
+      }
+
       const createKtxModule = await this.loadLibktxScript(scriptUrl);
+
+      if (this.config.verbose) {
+        console.log('[KTX2] Script loaded, creating module instance...');
+      }
 
       // Initialize the module
       const moduleConfig: any = {};
       if (libktxWasmUrl) {
         moduleConfig.locateFile = (filename: string) => {
+          if (this.config.verbose) {
+            console.log('[KTX2] locateFile called for:', filename);
+          }
           if (filename.endsWith('.wasm')) {
+            if (this.config.verbose) {
+              console.log('[KTX2] Returning WASM URL:', libktxWasmUrl);
+            }
             return libktxWasmUrl;
           }
           return filename;
         };
+      }
+
+      if (this.config.verbose) {
+        console.log('[KTX2] Initializing WASM module...');
       }
 
       this.ktxModule = await createKtxModule(moduleConfig);
