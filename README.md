@@ -44,16 +44,18 @@ This project uses [playcanvas-sync][playcanvas-sync] to upload code to PlayCanva
 
 Upload these files from `build/esm/` folder:
 
-- ✅ `Ktx2LoaderScript.mjs` - Main script (ESM format)
-- ✅ `ktx2-loader/` - Loader modules folder (all .js files)
-- ✅ `libktx.mjs` - KTX transcoding library
-- ✅ `libktx.wasm` - WASM binary
+- ✅ `scripts/Ktx2LoaderScript.mjs` - Main script (ESM format)
+- ✅ `ktx2-loader/` - Loader modules folder (all .mjs files)
+- ✅ `libs/libktx/libktx.mjs` - KTX transcoding library
+- ✅ `libs/libktx/libktx.wasm` - WASM binary
+
+**Note:** The script will automatically search for `libktx.mjs` and `libktx.wasm` assets in PlayCanvas Editor by name, regardless of their folder location.
 
 **In PlayCanvas Editor:**
-- `Ktx2LoaderScript.mjs` → Type: **Script**
-- All `.js` files in `ktx2-loader/` → Type: **Script**
-- `libktx.mjs` → Type: **Script**
-- `libktx.wasm` → Type: **Binary**
+- `scripts/Ktx2LoaderScript.mjs` → Type: **Script**
+- All `.mjs` files in `ktx2-loader/` → Type: **Script**
+- `libs/libktx/libktx.mjs` → Type: **Script**
+- `libs/libktx/libktx.wasm` → Type: **wasm** (or **binary** as fallback)
 
 #### Option B: AMD Bundle (Legacy)
 
@@ -216,12 +218,19 @@ ktx2-progressive-loader-esm/
 │   │       └── colorspace.ts         # DFD parsing
 │   ├── scripts/
 │   │   └── Ktx2LoaderScript.ts       # PlayCanvas script component
-│   └── index.ts                      # Entry point
-├── build/
-│   ├── main.bundle.js                # Compiled output
-│   ├── libktx.mjs                    # Transcoding library
-│   └── libktx.wasm                   # WASM binary
-└── lib/                              # Source libraries
+│   └── index.ts                      # Entry point (AMD bundle)
+├── build/esm/                        # ESM build output
+│   ├── scripts/
+│   │   └── Ktx2LoaderScript.mjs      # Compiled script
+│   ├── ktx2-loader/
+│   │   ├── Ktx2ProgressiveLoader.mjs # Compiled loader
+│   │   ├── KtxCacheManager.mjs       # Compiled cache manager
+│   │   └── utils/                    # Compiled utilities
+│   └── libs/
+│       └── libktx/
+│           ├── libktx.mjs            # Transcoding library
+│           └── libktx.wasm           # WASM binary
+└── lib/                              # Source libraries (WASM/JS)
 ```
 
 ## 📝 Implementation Status

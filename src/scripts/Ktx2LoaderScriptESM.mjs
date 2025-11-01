@@ -1,18 +1,13 @@
 /**
- * KTX2 Progressive Loader Script (ESM Version)
+ * KTX2 Progressive Loader Script for PlayCanvas 2.x ESM
  *
- * Usage:
- * 1. Upload this script to PlayCanvas Editor
- * 2. Add Script Component to an Entity with a model
- * 3. Add this script from the Script dropdown
- * 4. Configure ktxUrl in Inspector
+ * This script dynamically loads the Ktx2ProgressiveLoader module.
  */
 
 import { Script } from 'playcanvas';
-import { Ktx2ProgressiveLoader } from '../ktx2-loader/Ktx2ProgressiveLoader.js';
 
-export class Ktx2LoaderScriptESM extends Script {
-  static scriptName = 'ktx2LoaderESM';
+export class Ktx2LoaderScript extends Script {
+  static scriptName = 'ktx2Loader';
 
   /** @attribute */
   ktxUrl = '';
@@ -46,27 +41,45 @@ export class Ktx2LoaderScriptESM extends Script {
 
   async initialize() {
     if (this.verbose) {
-      console.log('[Ktx2LoaderScriptESM] Initializing...');
+      console.log('[KTX2] Script initializing...');
     }
 
-    // Create loader instance
-    this.loader = new Ktx2ProgressiveLoader(this.app, {
-      ktxUrl: this.ktxUrl,
-      progressive: this.progressive,
-      isSrgb: this.isSrgb,
-      verbose: this.verbose,
-      enableCache: this.enableCache,
-      useWorker: this.useWorker,
-      adaptiveLoading: this.adaptiveLoading,
-      stepDelayMs: this.stepDelayMs,
-    });
-
     try {
+      // Dynamic import of the loader module
+      // Use ../ to go up from scripts/ folder
+      const loaderModule = await import('../ktx2-loader/Ktx2ProgressiveLoader.mjs');
+      const Ktx2ProgressiveLoader = loaderModule.Ktx2ProgressiveLoader;
+
+      // Create loader instance
+      this.loader = new Ktx2ProgressiveLoader(this.app, {
+        ktxUrl: this.ktxUrl,
+        progressive: this.progressive,
+        isSrgb: this.isSrgb,
+        verbose: this.verbose,
+        enableCache: this.enableCache,
+        useWorker: this.useWorker,
+        adaptiveLoading: this.adaptiveLoading,
+        stepDelayMs: this.stepDelayMs,
+      });
+
       // Find libktx assets
+      if (this.verbose) {
+        console.log('[KTX2] Searching for libktx assets...');
+      }
+
       const libktxMjsAsset = this.app.assets.find('libktx.mjs', 'script');
-      const libktxWasmAsset = this.app.assets.find('libktx.wasm', 'binary');
+      // PlayCanvas определяет .wasm файлы как тип 'wasm', а не 'binary'
+      let libktxWasmAsset = this.app.assets.find('libktx.wasm', 'wasm');
+
+      // Fallback: попробовать найти как binary на случай если тип изменён вручную
+      if (!libktxWasmAsset) {
+        libktxWasmAsset = this.app.assets.find('libktx.wasm', 'binary');
+      }
 
       if (!libktxMjsAsset || !libktxWasmAsset) {
+        console.error('[KTX2] libktx.mjs found:', !!libktxMjsAsset);
+        console.error('[KTX2] libktx.wasm found:', !!libktxWasmAsset);
+        console.error('[KTX2] Available asset types:', [...new Set(this.app.assets.list().map(a => a.type))]);
         throw new Error(
           'libktx assets not found! Please upload libktx.mjs and libktx.wasm to PlayCanvas Assets.'
         );
@@ -75,24 +88,27 @@ export class Ktx2LoaderScriptESM extends Script {
       const libktxMjsUrl = libktxMjsAsset.getFileUrl();
       const libktxWasmUrl = libktxWasmAsset.getFileUrl();
 
+      if (this.verbose) {
+        console.log('[KTX2] Asset URLs:');
+        console.log('  - libktx.mjs:', libktxMjsUrl);
+        console.log('  - libktx.wasm:', libktxWasmUrl);
+        console.log('[KTX2] Initializing loader...');
+      }
+
       // Initialize loader
       await this.loader.initialize(libktxMjsUrl, libktxWasmUrl);
 
       if (this.verbose) {
-        console.log('[Ktx2LoaderScriptESM] Loader initialized');
+        console.log('[KTX2] Loader initialized successfully');
       }
 
       // Load texture progressively
       this.texture = await this.loader.loadToEntity(this.entity, {
         onProgress: (level, total, info) => {
           if (this.verbose) {
-            console.log(
-              `[Ktx2LoaderScriptESM] Progress: ${level}/${total} ` +
-              `(${info.width}x${info.height}, ${info.cached ? 'cached' : 'network'})`
-            );
+            console.log(`[KTX2] Progress: ${level}/${total}`, info);
           }
 
-          // Fire event for UI updates
           this.app.fire('ktx2:progress', {
             level,
             total,
@@ -103,7 +119,7 @@ export class Ktx2LoaderScriptESM extends Script {
 
         onComplete: (stats) => {
           if (this.verbose) {
-            console.log('[Ktx2LoaderScriptESM] Loading complete!', stats);
+            console.log('[KTX2] Complete!', stats);
           }
 
           this.app.fire('ktx2:complete', stats);
@@ -111,20 +127,19 @@ export class Ktx2LoaderScriptESM extends Script {
       });
 
       if (this.verbose) {
-        console.log('[Ktx2LoaderScriptESM] Texture loaded successfully');
+        console.log('[KTX2] Texture loaded successfully');
       }
     } catch (error) {
-      console.error('[Ktx2LoaderScriptESM] Error:', error);
+      console.error('[KTX2] Error:', error);
       this.app.fire('ktx2:error', error);
     }
   }
 
   update(dt) {
-    // Optional: Add runtime logic here
+    // Runtime logic here if needed
   }
 
   onDestroy() {
-    // Cleanup resources
     if (this.loader) {
       this.loader.dispose();
       this.loader = null;
@@ -136,7 +151,7 @@ export class Ktx2LoaderScriptESM extends Script {
     }
 
     if (this.verbose) {
-      console.log('[Ktx2LoaderScriptESM] Destroyed');
+      console.log('[KTX2] Script destroyed');
     }
   }
 }

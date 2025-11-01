@@ -1,0 +1,39 @@
+{
+  // TypeScript settings
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+
+  // Editor settings
+  "editor.formatOnSave": false,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+
+  // Files to exclude from explorer
+  "files.exclude": {
+    "**/.git": true,
+    "**/node_modules": true,
+    "build": true
+  },
+
+  // Search exclusions
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/build": true
+  },
+
+  // TypeScript validation
+  "typescript.validate.enable": true,
+  "javascript.validate.enable": true,
+
+  // PlayCanvas specific
+  "files.associations": {
+    "*.mjs": "javascript"
+  },
+
+  // Auto-save configuration (helpful for watch mode)
+  "files.autoSave": "onFocusChange",
+
+  // Terminal
+  "terminal.integrated.defaultProfile.linux": "bash"
+}
