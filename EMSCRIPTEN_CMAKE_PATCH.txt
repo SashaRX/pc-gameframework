@@ -1,0 +1,263 @@
+# Патч для CMakeLists.txt в KTX-Software
+# Применить эти изменения в секции EMSCRIPTEN (около строки 952)
+
+# ==============================================================================
+# НАЙТИ И ЗАМЕНИТЬ в секции if(EMSCRIPTEN AND KTX_FEATURE_JS)
+# ==============================================================================
+
+# ---------------------------
+# 1. ДОБАВИТЬ -sEXPORT_ES6=1
+# ---------------------------
+
+# НАЙТИ:
+set(
+    KTX_EM_COMMON_LINK_FLAGS
+    --bind
+    "SHELL:-s MODULARIZE=1"
+    "SHELL:-s EXPORTED_RUNTIME_METHODS=['ccall','cwrap','getValue','setValue','HEAPU8','GL']"
+    "SHELL:-s GL_PREINITIALIZED_CONTEXT=1"
+)
+
+# ЗАМЕНИТЬ НА:
+set(
+    KTX_EM_COMMON_LINK_FLAGS
+    --bind
+    "SHELL:-s MODULARIZE=1"
+    "SHELL:-s EXPORT_ES6=1"                    # ← ДОБАВЛЕНО
+    "SHELL:-s FILESYSTEM=0"                     # ← ДОБАВЛЕНО
+    "SHELL:-s NO_EXIT_RUNTIME=1"                # ← ДОБАВЛЕНО
+    "SHELL:-s ALLOW_MEMORY_GROWTH=1"            # ← ДОБАВЛЕНО
+    "SHELL:-s EXPORTED_RUNTIME_METHODS=['ccall','cwrap','getValue','setValue','HEAPU8','GL']"
+    "SHELL:-s GL_PREINITIALIZED_CONTEXT=1"
+)
+
+# ---------------------------
+# 2. ДОБАВИТЬ флаги для ktx_js target
+# ---------------------------
+
+# НАЙТИ:
+target_link_options(ktx_js PUBLIC
+  ${KTX_EM_COMMON_KTX_LINK_FLAGS}
+  "SHELL:-s EXPORT_NAME=createKtxModule"
+  ${KTX_EXPORTED_FUNCTIONS_ARG}
+)
+
+# ЗАМЕНИТЬ НА:
+target_link_options(ktx_js PUBLIC
+  ${KTX_EM_COMMON_KTX_LINK_FLAGS}
+  "SHELL:-s EXPORT_NAME=createKtxModule"
+  "SHELL:-s ENVIRONMENT=web,worker"           # ← ДОБАВЛЕНО
+  "SHELL:-s MAXIMUM_MEMORY=4GB"               # ← ДОБАВЛЕНО
+  "SHELL:-s INITIAL_MEMORY=64MB"              # ← ДОБАВЛЕНО
+  ${KTX_EXPORTED_FUNCTIONS_ARG}
+)
+
+# ---------------------------
+# 3. АНАЛОГИЧНО для ktx_js_read target
+# ---------------------------
+
+# НАЙТИ:
+target_link_options(ktx_js_read PUBLIC
+  ${KTX_EM_COMMON_KTX_LINK_FLAGS}
+  "SHELL:-s EXPORT_NAME=createKtxReadModule"
+  ${KTX_EXPORTED_FUNCTIONS_ARG}
+)
+
+# ЗАМЕНИТЬ НА:
+target_link_options(ktx_js_read PUBLIC
+  ${KTX_EM_COMMON_KTX_LINK_FLAGS}
+  "SHELL:-s EXPORT_NAME=createKtxReadModule"
+  "SHELL:-s ENVIRONMENT=web,worker"           # ← ДОБАВЛЕНО
+  "SHELL:-s MAXIMUM_MEMORY=4GB"               # ← ДОБАВЛЕНО
+  "SHELL:-s INITIAL_MEMORY=64MB"              # ← ДОБАВЛЕНО
+  ${KTX_EXPORTED_FUNCTIONS_ARG}
+)
+
+# ==============================================================================
+# ОПЦИОНАЛЬНО: Добавить --post-js для автоматического Module.ready
+# ==============================================================================
+
+# Создать файл interface/js_binding/post_ready.js:
+# -------------------------------------------------------
+# if (!Module.ready) {
+#   var readyPromiseResolve, readyPromiseReject;
+#   Module.ready = new Promise((resolve, reject) => {
+#     readyPromiseResolve = resolve;
+#     readyPromiseReject = reject;
+#   });
+#   const originalInit = Module.onRuntimeInitialized;
+#   Module.onRuntimeInitialized = function() {
+#     try {
+#       if (originalInit) originalInit();
+#       if (readyPromiseResolve) readyPromiseResolve(Module);
+#     } catch(err) {
+#       if (readyPromiseReject) readyPromiseReject(err);
+#       throw err;
+#     }
+#   };
+# }
+# -------------------------------------------------------
+
+# Затем в CMakeLists.txt добавить:
+set(
+    KTX_EM_COMMON_KTX_LINK_FLAGS
+    --pre-js ${CMAKE_CURRENT_SOURCE_DIR}/interface/js_binding/class_compat.js
+    --post-js ${CMAKE_CURRENT_SOURCE_DIR}/interface/js_binding/post_ready.js  # ← ДОБАВИТЬ
+    --extern-post-js ${CMAKE_CURRENT_SOURCE_DIR}/interface/js_binding/module_create_compat.js
+    ${KTX_EM_COMMON_LINK_FLAGS}
+)
+
+# ==============================================================================
+# ИТОГО: После всех изменений полная секция выглядит так:
+# ==============================================================================
+
+if(EMSCRIPTEN AND KTX_FEATURE_JS)
+    set(
+        KTX_EM_COMMON_LINK_FLAGS
+        --bind
+        "SHELL:-s MODULARIZE=1"
+        "SHELL:-s EXPORT_ES6=1"
+        "SHELL:-s FILESYSTEM=0"
+        "SHELL:-s NO_EXIT_RUNTIME=1"
+        "SHELL:-s ALLOW_MEMORY_GROWTH=1"
+        "SHELL:-s EXPORTED_RUNTIME_METHODS=['ccall','cwrap','getValue','setValue','HEAPU8','GL']"
+        "SHELL:-s GL_PREINITIALIZED_CONTEXT=1"
+    )
+
+    set(
+        KTX_EM_COMMON_KTX_LINK_FLAGS
+        --pre-js ${CMAKE_CURRENT_SOURCE_DIR}/interface/js_binding/class_compat.js
+        --post-js ${CMAKE_CURRENT_SOURCE_DIR}/interface/js_binding/post_ready.js
+        --extern-post-js ${CMAKE_CURRENT_SOURCE_DIR}/interface/js_binding/module_create_compat.js
+        ${KTX_EM_COMMON_LINK_FLAGS}
+    )
+
+    set(
+        KTX_JS_COMMON_SOURCE
+        interface/js_binding/ktx_wrapper.cpp
+        interface/js_binding/class_compat.js
+        interface/js_binding/module_create_compat.js
+    )
+
+    # Список экспортируемых функций
+    set(KTX_EXPORTS_LIST
+      _malloc
+      _free
+      _ktxTexture_CreateFromMemory
+      _ktxTexture2_CreateFromMemory
+      _ktxTexture2_CreateFromStream
+      _ktxTexture_Destroy
+      _ktxTexture2_Destroy
+      _ktxTexture2_TranscodeBasis
+      _ktxTexture2_NeedsTranscoding
+      _ktxTexture_GetImageOffset
+      _ktxTexture_GetData
+      _ktxTexture_GetDataSize
+      _ktxTexture_GetSize
+      _ktxTexture_GetVkFormat
+      _ktxTexture_GetOGLFormat
+      _ktxErrorString
+      _ktx_get_base_width
+      _ktx_get_base_height
+      _ktx_get_num_levels
+      _ktx_get_image_offset
+      _ktx_get_data
+      _ktx_get_data_size
+    )
+
+    # Построение JSON для Windows/Ninja
+    set(_json "[")
+    foreach(sym IN LISTS KTX_EXPORTS_LIST)
+      string(APPEND _json "\\\"${sym}\\\",")
+    endforeach()
+    string(REGEX REPLACE ",$" "" _json "${_json}")
+    string(APPEND _json "]")
+
+    set(KTX_EXPORTED_FUNCTIONS_ARG "SHELL:-sEXPORTED_FUNCTIONS=${_json}")
+    message(STATUS "EXPORTED_FUNCTIONS ARG -> ${KTX_EXPORTED_FUNCTIONS_ARG}")
+
+    # ktx_js target (с write support)
+    add_executable( ktx_js
+        ${KTX_JS_COMMON_SOURCE}
+        interface/js_binding/vk_format.inl
+        interface/js_binding/ktx_shim.c
+    )
+
+    target_compile_definitions(ktx_js PUBLIC KTX_FEATURE_WRITE)
+    target_link_libraries( ktx_js ktx )
+    target_sources(ktx_js PRIVATE lib/memstream.c)
+    target_include_directories(
+        ktx_js
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/other_include
+        ${CMAKE_CURRENT_SOURCE_DIR}/lib/src
+        $<TARGET_PROPERTY:ktx,INTERFACE_INCLUDE_DIRECTORIES>
+    )
+
+    set_target_properties( ktx_js PROPERTIES OUTPUT_NAME "libktx")
+
+    target_link_options(ktx_js PUBLIC
+      ${KTX_EM_COMMON_KTX_LINK_FLAGS}
+      "SHELL:-s EXPORT_NAME=createKtxModule"
+      "SHELL:-s ENVIRONMENT=web,worker"
+      "SHELL:-s MAXIMUM_MEMORY=4GB"
+      "SHELL:-s INITIAL_MEMORY=64MB"
+      ${KTX_EXPORTED_FUNCTIONS_ARG}
+    )
+
+    install(TARGETS ktx_js
+        RUNTIME
+            DESTINATION .
+            COMPONENT ktx_js
+    )
+    install(FILES ${CMAKE_BINARY_DIR}/libktx.wasm
+        DESTINATION .
+        COMPONENT ktx_js
+    )
+
+    # ktx_js_read target (read-only)
+    add_executable( ktx_js_read
+        ${KTX_JS_COMMON_SOURCE}
+        interface/js_binding/ktx_shim.c
+    )
+    target_link_libraries( ktx_js_read ktx_read )
+    target_sources(ktx_js_read PRIVATE lib/memstream.c)
+    target_include_directories(
+        ktx_js_read
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/other_include
+        ${CMAKE_CURRENT_SOURCE_DIR}/lib/src
+        $<TARGET_PROPERTY:ktx_read,INTERFACE_INCLUDE_DIRECTORIES>
+    )
+
+    target_link_options(ktx_js_read PUBLIC
+      ${KTX_EM_COMMON_KTX_LINK_FLAGS}
+      "SHELL:-s EXPORT_NAME=createKtxReadModule"
+      "SHELL:-s ENVIRONMENT=web,worker"
+      "SHELL:-s MAXIMUM_MEMORY=4GB"
+      "SHELL:-s INITIAL_MEMORY=64MB"
+      ${KTX_EXPORTED_FUNCTIONS_ARG}
+    )
+
+    set_target_properties( ktx_js_read PROPERTIES OUTPUT_NAME "libktx_read")
+
+    add_custom_command(
+        TARGET ktx_js_read
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE_DIR:ktx_js_read>/$<TARGET_FILE_PREFIX:ktx_js_read>$<TARGET_FILE_BASE_NAME:ktx_js_read>.js" "${PROJECT_SOURCE_DIR}/tests/webgl"
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE_DIR:ktx_js_read>/$<TARGET_FILE_PREFIX:ktx_js_read>$<TARGET_FILE_BASE_NAME:ktx_js_read>.wasm" "${PROJECT_SOURCE_DIR}/tests/webgl"
+        COMMENT "Copy libktx_read.js and libktx_read.wasm to tests/webgl"
+    )
+
+    install(TARGETS ktx_js_read
+        RUNTIME
+            DESTINATION .
+            COMPONENT ktx_js_read
+    )
+    install(FILES ${CMAKE_BINARY_DIR}/libktx_read.wasm
+        DESTINATION .
+        COMPONENT ktx_js_read
+    )
+
+    # ... остальные targets (msc_basis_transcoder_js и т.д.) ...
+endif()
