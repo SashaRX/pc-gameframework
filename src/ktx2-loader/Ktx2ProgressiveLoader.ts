@@ -422,97 +422,42 @@ export class Ktx2ProgressiveLoader {
   }
 
   /**
-   * Load libktx.mjs script dynamically
-   * Works in AMD/PlayCanvas environment
+   * Load libktx.mjs script dynamically using ES module import
+   * Works in PlayCanvas 2.x ESM environment
    */
   private async loadLibktxScript(url: string): Promise<any> {
-    return new Promise((resolve, reject) => {
+    if (this.config.verbose) {
+      console.log('[KTX2] Importing libktx module via dynamic import...');
+    }
+
+    try {
+      // Use dynamic import to load the ESM module
+      // This properly handles import.meta and other ESM features
+      const module = await import(/* webpackIgnore: true */ url);
+
       if (this.config.verbose) {
-        console.log('[KTX2] Fetching script from URL...');
+        console.log('[KTX2] Module imported successfully');
+        console.log('[KTX2] Module exports:', Object.keys(module));
       }
 
-      // Fetch the script text
-      fetch(url)
-        .then(response => {
-          if (this.config.verbose) {
-            console.log('[KTX2] Fetch response received, status:', response.status);
-          }
-          if (!response.ok) {
-            throw new Error(`Failed to fetch ${url}: ${response.status}`);
-          }
-          return response.text();
-        })
-        .then(scriptText => {
-          if (this.config.verbose) {
-            console.log('[KTX2] Script text received, length:', scriptText.length);
-          }
+      // Get the default export (the factory function)
+      const createModule = module.default || module;
 
-          // Remove export statement to make it work in global scope
-          // libktx.mjs exports: export default Module;
-          const modifiedScript = scriptText.replace(/export\s+default\s+(\w+);?/g, 'window.libktxModule = $1;');
+      if (!createModule) {
+        throw new Error('No default export found in libktx module');
+      }
 
-          if (this.config.verbose) {
-            console.log('[KTX2] Script modified, creating script element...');
-          }
+      if (this.config.verbose) {
+        console.log('[KTX2] Got module factory function');
+      }
 
-          // Create and execute script
-          const script = document.createElement('script');
-          script.textContent = modifiedScript;
-
-          script.onload = () => {
-            if (this.config.verbose) {
-              console.log('[KTX2] Script onload event fired');
-            }
-            const createModule = (window as any).libktxModule;
-            if (!createModule) {
-              reject(new Error('libktxModule not found in window after script load'));
-              return;
-            }
-
-            // Cleanup
-            delete (window as any).libktxModule;
-            script.remove();
-
-            resolve(createModule);
-          };
-
-          script.onerror = (e) => {
-            if (this.config.verbose) {
-              console.log('[KTX2] Script onerror event fired:', e);
-            }
-            reject(new Error(`Failed to load libktx script from ${url}`));
-            script.remove();
-          };
-
-          if (this.config.verbose) {
-            console.log('[KTX2] Appending script to document head...');
-          }
-
-          document.head.appendChild(script);
-
-          if (this.config.verbose) {
-            console.log('[KTX2] Script appended, checking if module is available...');
-            // For inline scripts, onload may not fire - check immediately
-            setTimeout(() => {
-              const createModule = (window as any).libktxModule;
-              if (createModule) {
-                console.log('[KTX2] Module found in window (via setTimeout check)');
-                delete (window as any).libktxModule;
-                script.remove();
-                resolve(createModule);
-              } else {
-                console.log('[KTX2] Module not found in window yet, waiting for onload...');
-              }
-            }, 0);
-          }
-        })
-        .catch(error => {
-          if (this.config.verbose) {
-            console.error('[KTX2] Error in loadLibktxScript:', error);
-          }
-          reject(error);
-        });
-    });
+      return createModule;
+    } catch (error) {
+      if (this.config.verbose) {
+        console.error('[KTX2] Error importing libktx module:', error);
+      }
+      throw error;
+    }
   }
 
   /**
