@@ -900,10 +900,16 @@ export class Ktx2ProgressiveLoader {
   }
 
   private createTexture(probe: Ktx2ProbeResult): pc.Texture {
+    // Determine pixel format based on colorspace
+    // In PlayCanvas 2.x, color textures (diffuse, albedo, etc) should use sRGB formats
+    // Linear formats are used for data textures (normal maps, roughness, etc)
+    const useSrgb = this.config.isSrgb || probe.colorSpace?.isSrgb;
+    const format = useSrgb ? pc.PIXELFORMAT_SRGBA8 : pc.PIXELFORMAT_RGBA8;
+
     const texture = new pc.Texture(this.app.graphicsDevice, {
       width: probe.width,
       height: probe.height,
-      format: pc.PIXELFORMAT_RGBA8,
+      format: format,
       mipmaps: true,
       minFilter: pc.FILTER_LINEAR_MIPMAP_LINEAR,
       magFilter: pc.FILTER_LINEAR,
@@ -912,12 +918,19 @@ export class Ktx2ProgressiveLoader {
     });
 
     texture.name = `ktx2_${probe.url.split('/').pop()}`;
-    
+
+    if (this.config.verbose) {
+      console.log(`[KTX2] Created texture with format: ${useSrgb ? 'SRGBA8' : 'RGBA8'}`);
+    }
+
     return texture;
   }
 
   /**
    * Upload RGBA mipmap data to GPU texture
+   *
+   * Note: This uses WebGL2 API directly for mipmap levels > 0
+   * PlayCanvas 2.x supports WebGL2 only (WebGL1 support was removed in v2.0)
    */
   private uploadMipLevel(texture: pc.Texture, level: number, result: Ktx2TranscodeResult): void {
     if (!result.data || result.data.length === 0) {
@@ -927,27 +940,21 @@ export class Ktx2ProgressiveLoader {
 
     try {
       // Upload to GPU using PlayCanvas Texture API
-      // setSource() expects: ArrayBufferView, width, height, format
-
       if (level === 0) {
-        // For the first level, we can use setSource which replaces the entire texture
-        // setSource accepts (source, width, height) or just (source)
-        (texture as any).setSource?.(result.data);
-
-        // Alternative: directly upload via lock/unlock
+        // For the first level, use PlayCanvas API
         const pixels = texture.lock();
         if (pixels) {
           pixels.set(result.data);
           texture.unlock();
         }
       } else {
-        // For subsequent levels, we need to upload to the specific mip level
-        // PlayCanvas doesn't have a direct API for this, so we use the underlying WebGL
+        // For subsequent mip levels, we need to use WebGL2 directly
+        // PlayCanvas doesn't expose a high-level API for uploading specific mip levels
         const device = this.app.graphicsDevice;
-        const gl = (device as any).gl as WebGLRenderingContext | WebGL2RenderingContext | null;
+        const gl = (device as any).gl as WebGL2RenderingContext | null;
 
         if (!gl) {
-          console.error('[KTX2] WebGL context not available');
+          console.error('[KTX2] WebGL2 context not available');
           return;
         }
 
@@ -960,16 +967,21 @@ export class Ktx2ProgressiveLoader {
 
         gl.bindTexture(gl.TEXTURE_2D, webglTexture);
 
+        // Determine internal format based on texture format
+        // PlayCanvas 2.x requires correct sRGB internal formats
+        const useSrgb = this.config.isSrgb;
+        const internalFormat = useSrgb ? gl.SRGB8_ALPHA8 : gl.RGBA8;
+
         // Upload the mipmap level
         // texImage2D(target, level, internalformat, width, height, border, format, type, pixels)
         gl.texImage2D(
           gl.TEXTURE_2D,
           level,
-          gl.RGBA,
+          internalFormat,
           result.width,
           result.height,
           0,
-          gl.RGBA,
+          gl.RGBA,  // format (always RGBA for source data)
           gl.UNSIGNED_BYTE,
           result.data
         );
@@ -991,7 +1003,7 @@ export class Ktx2ProgressiveLoader {
 
   private applyTextureToEntity(entity: pc.Entity, texture: pc.Texture): void {
     const model = entity.model;
-    if (model && model.meshInstances.length > 0) {
+    if (model && model.meshInstances && model.meshInstances.length > 0) {
       const material = model.meshInstances[0].material as pc.StandardMaterial;
       if (material) {
         material.diffuseMap = texture;
