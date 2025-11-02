@@ -20,6 +20,7 @@ import type {
   LoadStats,
   MipLoadInfo,
   KtxModule,
+  KtxApi,
 } from './types';
 import { KtxCacheManager } from './KtxCacheManager';
 import { alignValue, readU64asNumber, writeU64 } from './utils/alignment';
@@ -40,6 +41,9 @@ export class Ktx2ProgressiveLoader {
   
   // KTX module (for main thread fallback)
   private ktxModule: KtxModule | null = null;
+
+  // KTX API (cwrap wrappers)
+  private ktxApi: KtxApi | null = null;
 
   // Cache manager
   private cacheManager: KtxCacheManager | null = null;
@@ -73,12 +77,68 @@ export class Ktx2ProgressiveLoader {
   // ============================================================================
 
   /**
+   * Register custom shader chunk for progressive LOD clamping
+   * This allows the shader to clamp LOD to the available mipmap range
+   */
+  private createShaderChunk(): void {
+    const device = this.app.graphicsDevice;
+    const chunks = (pc as any).ShaderChunks.get(device, (pc as any).SHADERLANGUAGE_GLSL);
+
+    chunks.set('diffusePS', `
+// diffusePS — анизотропия сохраняется, LOD клампится в [min,max]
+uniform sampler2D texture_diffuseMap;
+uniform float material_minAvailableLod; // min LOD, = BASE_LEVEL
+uniform float material_maxAvailableLod; // max LOD, = MAX_LEVEL
+
+void getAlbedo() {
+    dAlbedo = vec3(1.0);
+    #ifdef STD_DIFFUSE_TEXTURE
+        vec2 uv = {STD_DIFFUSE_TEXTURE_UV};
+
+        // Производные в нормализованных UV
+        vec2 dudx = dFdx(uv);
+        vec2 dudy = dFdy(uv);
+
+        // Оценка auto-LOD
+        vec2 texSize = vec2(textureSize(texture_diffuseMap, 0));
+        float rho2 = max(dot(dudx * texSize, dudx * texSize),
+                         dot(dudy * texSize, dudy * texSize));
+        float autoLod = 0.5 * log2(rho2);
+
+        // Клампим в доступное окно
+        float targetLod = clamp(autoLod,
+                                material_minAvailableLod,
+                                material_maxAvailableLod);
+
+        // Масштабируем производные
+        float scale = exp2(targetLod - autoLod);
+
+        // Аппаратная анизотропия + трилинеар
+        dAlbedo = textureGrad(texture_diffuseMap, uv,
+                             dudx * scale, dudy * scale).rgb;
+    #endif
+
+    #ifdef STD_DIFFUSE_CONSTANT
+        dAlbedo *= material_diffuse.rgb;
+    #endif
+}
+`);
+
+    if (this.config.verbose) {
+      console.log('[KTX2] Custom shader chunk registered');
+    }
+  }
+
+  /**
    * Initialize the loader (load libktx, setup worker, init cache)
    */
   async initialize(libktxModuleUrl?: string, libktxWasmUrl?: string): Promise<void> {
     if (this.config.verbose) {
       console.log('[KTX2] Initializing loader...');
     }
+
+    // Register custom shader chunk for progressive LOD clamping
+    this.createShaderChunk();
 
     // Initialize cache
     if (this.config.enableCache) {
@@ -169,9 +229,15 @@ export class Ktx2ProgressiveLoader {
     const texture = this.createTexture(probe);
     
     // 5. Progressive loading loop
+    // Load from lowest quality (highest mip index) to highest quality (mip 0)
     let lastFrameTime = performance.now();
+    const targetLevel = 0; // Always load up to the highest quality (level 0)
 
-    for (let i = startLevel; i < probe.levelCount; i++) {
+    // Track LOD range: min = best quality (lowest number), max = worst quality (highest number)
+    let minAvailableLod = startLevel;
+    let maxAvailableLod = startLevel;
+
+    for (let i = startLevel; i >= targetLevel; i--) {
       const levelInfo = probe.levels[i];
       if (!levelInfo) continue;
 
@@ -241,9 +307,22 @@ export class Ktx2ProgressiveLoader {
         continue;
       }
 
-      // Upload to GPU
-      this.uploadMipLevel(texture, i, result);
+      // Update LOD range as we load each level
+      if (i < minAvailableLod) minAvailableLod = i;
+      if (i > maxAvailableLod) maxAvailableLod = i;
+
+      // Upload to GPU with progressive LOD update
+      this.uploadMipLevel(texture, i, result, minAvailableLod, maxAvailableLod);
       loadStats.levelsLoaded++;
+
+      // Apply texture to entity after first level is loaded
+      // This makes the texture visible immediately with lowest quality
+      if (i === startLevel) {
+        this.applyTextureToEntity(entity, texture, probe.levelCount);
+        if (this.config.verbose) {
+          console.log('[KTX2] Texture applied to entity with initial quality');
+        }
+      }
 
       // Update heap stats
       if (result.heapStats) {
@@ -265,11 +344,14 @@ export class Ktx2ProgressiveLoader {
           cached: fromCache,
           transcodeTime: 0,
         };
-        callbacks.onProgress(i - startLevel + 1, probe.levelCount - startLevel, mipInfo);
+        // Calculate progress: going from startLevel down to targetLevel
+        const currentStep = startLevel - i + 1;
+        const totalSteps = startLevel - targetLevel + 1;
+        callbacks.onProgress(currentStep, totalSteps, mipInfo);
       }
 
-      // FPS limiter
-      if (i < probe.levelCount - 1) {
+      // FPS limiter - delay between mip levels (except after the last one)
+      if (i > targetLevel) {
         const now = performance.now();
         const elapsed = now - lastFrameTime;
         const minInterval = Math.max(this.config.minFrameInterval, 0);
@@ -283,8 +365,8 @@ export class Ktx2ProgressiveLoader {
       }
     }
 
-    // Apply texture to entity
-    this.applyTextureToEntity(entity, texture);
+    // Texture was already applied to entity after first level load
+    // All subsequent levels improve the quality progressively
 
     // Completion stats
     loadStats.endTime = performance.now();
@@ -373,23 +455,6 @@ export class Ktx2ProgressiveLoader {
       let runtimeInitialized = false;
       const verbose = this.config.verbose;
 
-      // Add onRuntimeInitialized callback
-      // IMPORTANT: We override the default callback, so we need to manually set up the bindings
-      moduleConfig.onRuntimeInitialized = function(this: any) {
-        // Manually recreate the default libktx bindings (from libktx.mjs source)
-        // The default callback does: Module["ktxTexture"]=Module.texture; etc.
-        this.ktxTexture = this.texture;
-        this.ErrorCode = this.error_code;
-        this.TranscodeTarget = this.transcode_fmt;
-        this.TranscodeFlags = this.transcode_flag_bits;
-
-        runtimeInitialized = true;
-        if (verbose) {
-          console.log('[KTX2] onRuntimeInitialized callback fired');
-          console.log('[KTX2] Created bindings - ktxTexture:', typeof this.ktxTexture);
-        }
-      };
-
       if (libktxWasmUrl) {
         moduleConfig.locateFile = (filename: string) => {
           if (this.config.verbose) {
@@ -409,7 +474,92 @@ export class Ktx2ProgressiveLoader {
         console.log('[KTX2] Initializing WASM module...');
       }
 
-      this.ktxModule = await createKtxModule(moduleConfig);
+      // CRITICAL: We need to wrap onRuntimeInitialized BEFORE the module fully initializes
+      // createKtxModule returns a promise, but the module object is available synchronously
+      // We need to get the module object and wrap its callback before awaiting
+      const modulePromise = createKtxModule(moduleConfig);
+
+      // The promise resolves to the module, but we need to intercept during initialization
+      // Use .then() to get the module object before it's fully initialized
+      this.ktxModule = await new Promise<KtxModule>((resolve, reject) => {
+        modulePromise.then((module: any) => {
+          if (verbose) {
+            console.log('[KTX2] Module promise resolved, checking initialization...');
+            console.log('[KTX2] Module has Ih:', typeof module.Ih);
+            console.log('[KTX2] Module has onRuntimeInitialized:', typeof module.onRuntimeInitialized);
+
+            // Debug: List ALL properties of the module
+            console.log('[KTX2] === MODULE PROPERTIES START ===');
+            const allKeys = Object.keys(module);
+            console.log('[KTX2] Total properties:', allKeys.length);
+            console.log('[KTX2] First 50 properties:', allKeys.slice(0, 50));
+
+            // Check for embind-related properties
+            const embindKeys = allKeys.filter(k => k.includes('ktx') || k.includes('Ktx') || k.includes('texture') || k.includes('Texture'));
+            console.log('[KTX2] Properties with "ktx/texture":', embindKeys);
+
+            // Check for potential C++ exports
+            const exportKeys = allKeys.filter(k => k.length === 2 || (k.length === 2 && k.match(/^[A-Z][a-z]$/)));
+            console.log('[KTX2] Short 2-letter properties (might be minified exports):', exportKeys);
+
+            // Check cwrap and embind
+            console.log('[KTX2] Has cwrap:', typeof module.cwrap);
+            console.log('[KTX2] Has ccall:', typeof module.ccall);
+            console.log('[KTX2] Has _malloc:', typeof module._malloc);
+            console.log('[KTX2] Has _free:', typeof module._free);
+            console.log('[KTX2] === MODULE PROPERTIES END ===');
+          }
+
+          // At this point, onRuntimeInitialized might have already fired
+          // Check if module is already initialized
+          if (module.ktxTexture) {
+            if (verbose) {
+              console.log('[KTX2] Module already initialized (ktxTexture exists)');
+            }
+            runtimeInitialized = true;
+            resolve(module);
+            return;
+          }
+
+          // If not initialized yet, we need to wait
+          // But since we're here after the promise resolved, it's likely already done
+          // Let's try calling Ih manually if it exists
+          if (module.Ih && typeof module.Ih === 'function') {
+            if (verbose) {
+              console.log('[KTX2] Calling Module.Ih() manually to create bindings...');
+              console.log('[KTX2] Before Ih() - Lh:', typeof module.Lh, 'Dh:', typeof module.Dh);
+            }
+
+            try {
+              module.Ih();
+
+              if (verbose) {
+                console.log('[KTX2] After Ih() - ktxTexture:', typeof module.ktxTexture);
+                console.log('[KTX2] After Ih() - ErrorCode:', typeof module.ErrorCode);
+                console.log('[KTX2] After Ih() - TranscodeTarget:', typeof module.TranscodeTarget);
+              }
+            } catch (e) {
+              if (verbose) {
+                console.log('[KTX2] Error calling Ih():', e);
+              }
+            }
+          }
+
+          // Manual fallback if Ih didn't work
+          if (!module.ktxTexture && module.Lh) {
+            if (verbose) {
+              console.log('[KTX2] Manual fallback: creating bindings from internal properties');
+            }
+            module.ktxTexture = module.Lh;
+            module.ErrorCode = module.Dh;
+            module.TranscodeTarget = module.Oh;
+            module.TranscodeFlags = module.Nh;
+          }
+
+          runtimeInitialized = true;
+          resolve(module);
+        }).catch(reject);
+      });
 
       if (this.config.verbose) {
         console.log('[KTX2] Module created successfully');
@@ -458,19 +608,69 @@ export class Ktx2ProgressiveLoader {
       }
 
       if (this.config.verbose) {
-        console.log('[KTX2] WASM module ready, checking available methods...');
+        console.log('[KTX2] === MODULE INSPECTION START ===');
         console.log('[KTX2] Module has ktxTexture:', typeof this.ktxModule.ktxTexture);
         console.log('[KTX2] Module has ErrorCode:', typeof this.ktxModule.ErrorCode);
         console.log('[KTX2] Module has TranscodeTarget:', typeof this.ktxModule.TranscodeTarget);
         console.log('[KTX2] Module has HEAPU8:', typeof this.ktxModule.HEAPU8);
+
+        // Inspect TranscodeTarget structure
+        if (this.ktxModule.TranscodeTarget) {
+          const tt: any = this.ktxModule.TranscodeTarget;
+          console.log('[KTX2] TranscodeTarget analysis:');
+          console.log('[KTX2]   - Type:', typeof tt);
+          console.log('[KTX2]   - Is function:', typeof tt === 'function');
+          console.log('[KTX2]   - Keys:', Object.keys(tt).length > 0 ? Object.keys(tt).slice(0, 15) : '(no keys)');
+          console.log('[KTX2]   - .values property:', typeof tt.values, tt.values ? '(exists)' : '(undefined)');
+
+          // Try different access patterns
+          console.log('[KTX2]   - Trying tt.RGBA32:', tt.RGBA32);
+          console.log('[KTX2]   - Trying tt["RGBA32"]:', tt["RGBA32"]);
+          console.log('[KTX2]   - Trying tt.values?.RGBA32:', tt.values?.RGBA32);
+
+          // If it's a function, try calling it
+          if (typeof tt === 'function') {
+            console.log('[KTX2]   - Is constructor-like function');
+            try {
+              console.log('[KTX2]   - Function.name:', tt.name);
+              console.log('[KTX2]   - Function.length:', tt.length);
+            } catch (e) {
+              console.log('[KTX2]   - Error inspecting function:', e);
+            }
+          }
+        }
+
+        // Inspect ErrorCode structure
+        if (this.ktxModule.ErrorCode) {
+          const ec: any = this.ktxModule.ErrorCode;
+          console.log('[KTX2] ErrorCode analysis:');
+          console.log('[KTX2]   - Type:', typeof ec);
+          console.log('[KTX2]   - Is function:', typeof ec === 'function');
+          console.log('[KTX2]   - Keys:', Object.keys(ec).length > 0 ? Object.keys(ec).slice(0, 15) : '(no keys)');
+          console.log('[KTX2]   - .values property:', typeof ec.values, ec.values ? '(exists)' : '(undefined)');
+
+          // Try different access patterns
+          console.log('[KTX2]   - Trying ec.SUCCESS:', ec.SUCCESS);
+          console.log('[KTX2]   - Trying ec["SUCCESS"]:', ec["SUCCESS"]);
+          console.log('[KTX2]   - Trying ec.values?.SUCCESS:', ec.values?.SUCCESS);
+        }
+
+        console.log('[KTX2] === MODULE INSPECTION END ===');
       }
 
-      if (!this.ktxModule || !this.ktxModule.ktxTexture) {
-        throw new Error('Module does not have ktxTexture constructor - WASM not initialized properly');
+      if (!this.ktxModule) {
+        throw new Error('Module not initialized properly');
       }
+
+      // Create cwrap API wrappers
+      if (this.config.verbose) {
+        console.log('[KTX2] Creating cwrap API wrappers...');
+      }
+
+      this.ktxApi = this.createKtxApi(this.ktxModule);
 
       if (this.config.verbose) {
-        console.log('[KTX2] libktx module loaded successfully (embind C++ API)');
+        console.log('[KTX2] libktx module loaded successfully (cwrap C API)');
       }
     } catch (error) {
       console.error('[KTX2] Failed to load libktx module:', error);
@@ -717,6 +917,97 @@ export class Ktx2ProgressiveLoader {
   }
 
   /**
+   * Calculate number of images at a specific mipmap level
+   * Used for SGD repacking in ETC1S format
+   */
+  private imagesPerLevel(levelIndex: number, pixelDepth: number, layerCount: number, faceCount: number): number {
+    const depthAtLevel = Math.max(1, (pixelDepth | 0) >>> levelIndex);
+    const layers = Math.max(1, layerCount | 0);
+    return layers * Math.max(1, faceCount | 0) * depthAtLevel;
+  }
+
+  /**
+   * Repack SGD (Supercompression Global Data) for a specific level
+   *
+   * For ETC1S (BasisLZ) format, SGD contains:
+   * - Header (20 bytes)
+   * - Image descriptors (20 bytes each) for ALL levels
+   * - Codebooks (endpoints, selectors, tables, extended)
+   *
+   * We need to extract only the descriptors for the target level
+   * while keeping all codebooks intact.
+   */
+  private repackSgdForLevel(
+    sgdFull: Uint8Array,
+    levelIndex: number,
+    totalLevelCount: number,
+    layerCount: number,
+    faceCount: number,
+    pixelDepth: number
+  ): Uint8Array {
+    if (!sgdFull || sgdFull.byteLength === 0) {
+      return new Uint8Array(0);
+    }
+
+    const view = new DataView(sgdFull.buffer, sgdFull.byteOffset, sgdFull.byteLength);
+
+    // Read SGD header (20 bytes total)
+    const headerSize = 20;
+    const endpointsByteLength = view.getUint32(4, true);
+    const selectorsByteLength = view.getUint32(8, true);
+    const tablesByteLength = view.getUint32(12, true);
+    const extendedByteLength = view.getUint32(16, true);
+
+    // Calculate total number of images across all levels
+    let imageCountFull = 0;
+    for (let i = 0; i < Math.max(1, totalLevelCount); i++) {
+      imageCountFull += this.imagesPerLevel(i, pixelDepth, layerCount, faceCount);
+    }
+
+    // Each image descriptor is 20 bytes
+    const imageDescSize = 20;
+    const imageDescsStart = headerSize;
+    const codebooksOffsetFull = imageDescsStart + imageCountFull * imageDescSize;
+
+    // Find starting index for our target level
+    let startIndex = 0;
+    for (let i = 0; i < levelIndex; i++) {
+      startIndex += this.imagesPerLevel(i, pixelDepth, layerCount, faceCount);
+    }
+
+    // Get image count for target level only
+    const levelImageCount = this.imagesPerLevel(levelIndex, pixelDepth, layerCount, faceCount);
+
+    // Extract descriptors for this level
+    const srcDescStart = imageDescsStart + startIndex * imageDescSize;
+    const srcDescEnd = srcDescStart + levelImageCount * imageDescSize;
+    const singleLevelDescs = sgdFull.subarray(srcDescStart, srcDescEnd);
+
+    // Codebooks are shared across all levels - copy them all
+    const codebooksSize = endpointsByteLength + selectorsByteLength + tablesByteLength + extendedByteLength;
+
+    // Build new SGD: header + single level descriptors + all codebooks
+    const newSgdSize = headerSize + singleLevelDescs.byteLength + codebooksSize;
+    const newSgd = new Uint8Array(newSgdSize);
+
+    // Copy header (unchanged)
+    newSgd.set(sgdFull.subarray(0, headerSize), 0);
+
+    // Copy single level descriptors
+    newSgd.set(singleLevelDescs, headerSize);
+
+    // Copy codebooks
+    const codebooksSrc = sgdFull.subarray(codebooksOffsetFull, codebooksOffsetFull + codebooksSize);
+    newSgd.set(codebooksSrc, headerSize + singleLevelDescs.byteLength);
+
+    if (this.config.verbose) {
+      console.log(`[KTX2] SGD repacked for level ${levelIndex}: ${levelImageCount} images (of ${imageCountFull} total), ${sgdFull.byteLength}→${newSgdSize} bytes`);
+    }
+
+    return newSgd;
+  }
+
+  /**
    * Repack a single mipmap level into a valid mini-KTX2 file
    * This creates a minimal KTX2 file containing just one level that libktx can transcode
    *
@@ -725,7 +1016,7 @@ export class Ktx2ProgressiveLoader {
    * 2. Level Index (24 bytes) - single entry pointing to data
    * 3. DFD (Data Format Descriptor) - copied from original
    * 4. KVD (Key-Value Data) - copied from original
-   * 5. SGD (Supercompression Global Data) - copied from original
+   * 5. SGD (Supercompression Global Data) - repacked for ETC1S or copied for UASTC
    * 6. Mipmap data - the actual payload
    */
   private repackSingleLevel(probe: Ktx2ProbeResult, level: number, payload: Uint8Array): Uint8Array {
@@ -738,30 +1029,57 @@ export class Ktx2ProgressiveLoader {
     const headerSize = 80;
     const levelIndexSize = 24; // Single level entry (3 × uint64)
 
+    // Read original header to check supercompression scheme
+    const origView = new DataView(probe.headerBytes.buffer, probe.headerBytes.byteOffset);
+    const supercompressionScheme = origView.getUint32(44, true);
+    const isETC1S = supercompressionScheme === 1; // 1 = BasisLZ (ETC1S)
+
     // Align sections according to KTX2 spec
     let offset = headerSize + levelIndexSize;
 
-    // DFD offset (must be 4-byte aligned)
-    const dfdOffset = alignValue(offset, 4);
+    // DFD offset (must be 4-byte aligned) - only if DFD has data
+    let dfdOffset = 0;
     const dfdLength = probe.dfd.length;
-    offset = dfdOffset + dfdLength;
+    if (dfdLength > 0) {
+      dfdOffset = alignValue(offset, 4);
+      offset = dfdOffset + dfdLength;
+    }
 
-    // KVD offset (must be 4-byte aligned)
-    const kvdOffset = alignValue(offset, 4);
+    // KVD offset (must be 4-byte aligned) - only if KVD has data
+    let kvdOffset = 0;
     const kvdLength = probe.kvd.length;
-    offset = kvdOffset + kvdLength;
+    if (kvdLength > 0) {
+      kvdOffset = alignValue(offset, 4);
+      offset = kvdOffset + kvdLength;
+    }
 
-    // SGD offset (must be 8-byte aligned)
-    const sgdOffset = alignValue(offset, 8);
-    const sgdLength = probe.sgd.length;
-    offset = sgdOffset + sgdLength;
+    // SGD: Repack for ETC1S, copy as-is for UASTC
+    let sgdData = probe.sgd;
+    if (isETC1S && probe.sgd.byteLength > 0) {
+      sgdData = this.repackSgdForLevel(
+        probe.sgd,
+        level,
+        probe.levelCount,
+        probe.layerCount,
+        probe.faceCount,
+        probe.pixelDepth
+      );
+    }
+
+    // SGD offset (must be 8-byte aligned) - only if SGD has data
+    let sgdOffset = 0;
+    const sgdLength = sgdData.length;
+    if (sgdLength > 0) {
+      sgdOffset = alignValue(offset, 8);
+      offset = sgdOffset + sgdLength;
+    }
 
     // Mipmap data offset (must be 8-byte aligned)
     const dataOffset = alignValue(offset, 8);
     const dataLength = payload.length;
 
-    // Total mini-KTX2 size
-    const totalSize = dataOffset + dataLength;
+    // Total mini-KTX2 size (must be 8-byte aligned per KTX2 spec)
+    const totalSize = alignValue(dataOffset + dataLength, 8);
 
     // Create buffer for mini-KTX2
     const miniKtx = new Uint8Array(totalSize);
@@ -776,9 +1094,6 @@ export class Ktx2ProgressiveLoader {
       0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A
     ]);
     miniKtx.set(identifier, 0);
-
-    // Copy header fields from probe (or reconstruct from original headerBytes)
-    const origView = new DataView(probe.headerBytes.buffer, probe.headerBytes.byteOffset);
 
     // Copy vkFormat, typeSize (bytes 12-19)
     view.setUint32(12, origView.getUint32(12, true), true); // vkFormat
@@ -808,10 +1123,23 @@ export class Ktx2ProgressiveLoader {
     // 2. Write Level Index (24 bytes) - single entry
     // ========================================================================
 
+    // Calculate uncompressedByteLength based on supercompression scheme
+    // - scheme 0 (no compression): use dataLength
+    // - scheme 2 (UASTC): use original uncompressedByteLength
+    // - scheme 1 (ETC1S): set to 0
+    let uncompressedByteLength = 0;
+    if (supercompressionScheme === 0) {
+      uncompressedByteLength = dataLength;
+    } else if (supercompressionScheme === 2) {
+      uncompressedByteLength = levelInfo.uncompressedByteLength || 0;
+    } else {
+      uncompressedByteLength = 0;
+    }
+
     const levelIndexOffset = 80;
     writeU64(view, levelIndexOffset, dataOffset);                         // byteOffset
     writeU64(view, levelIndexOffset + 8, dataLength);                     // byteLength
-    writeU64(view, levelIndexOffset + 16, levelInfo.uncompressedByteLength); // uncompressedByteLength
+    writeU64(view, levelIndexOffset + 16, uncompressedByteLength);        // uncompressedByteLength
 
     // ========================================================================
     // 3. Write DFD (Data Format Descriptor)
@@ -834,7 +1162,7 @@ export class Ktx2ProgressiveLoader {
     // ========================================================================
 
     if (sgdLength > 0) {
-      miniKtx.set(probe.sgd, sgdOffset);
+      miniKtx.set(sgdData, sgdOffset);
     }
 
     // ========================================================================
@@ -844,15 +1172,67 @@ export class Ktx2ProgressiveLoader {
     miniKtx.set(payload, dataOffset);
 
     if (this.config.verbose) {
+      // Get header info for debugging
+      const headerView = new DataView(miniKtx.buffer, 0, 80);
+      const levelCount = headerView.getUint32(40, true);
+      const vkFormat = headerView.getUint32(12, true);
+
       console.log(`[KTX2] Repacked level ${level}:`, {
         originalSize: `${(levelInfo.byteLength / 1024).toFixed(2)} KB`,
         miniKtxSize: `${(totalSize / 1024).toFixed(2)} KB`,
         dimensions: `${mipWidth}x${mipHeight}`,
         overhead: `${((totalSize - dataLength) / 1024).toFixed(2)} KB`,
+        dfdSize: `${probe.dfd.length} bytes`,
+        dfdOffset,
+        kvdSize: `${probe.kvd.length} bytes`,
+        kvdOffset,
+        sgdSize: `${sgdData.length} bytes`,
+        sgdOffset,
+        sgdOriginalSize: `${probe.sgd.length} bytes`,
+        payloadSize: dataLength,
+        payloadOffset: dataOffset,
+        isETC1S,
+        supercompressionScheme,
+        uncompressedByteLength,
+        vkFormat,
+        levelCount,
+        headerBytes: Array.from(miniKtx.slice(0, 48)).map(b => b.toString(16).padStart(2, '0')).join(' '),
       });
     }
 
     return miniKtx;
+  }
+
+  /**
+   * Create cwrap API wrappers for KTX C functions
+   * Based on old working implementation from Ktx2ProgressiveVanilla.js
+   */
+  private createKtxApi(module: KtxModule): KtxApi {
+    if (this.config.verbose) {
+      console.log('[KTX2] Creating cwrap wrappers for C API...');
+    }
+
+    const api: KtxApi = {
+      malloc: module.cwrap('malloc', 'number', ['number']),
+      free: module.cwrap('free', null, ['number']),
+      createFromMemory: module.cwrap('ktxTexture2_CreateFromMemory', 'number', ['number', 'number', 'number', 'number']),
+      destroy: module.cwrap('ktxTexture2_Destroy', null, ['number']),
+      transcode: module.cwrap('ktxTexture2_TranscodeBasis', 'number', ['number', 'number', 'number']),
+      needsTranscoding: module.cwrap('ktxTexture2_NeedsTranscoding', 'number', ['number']),
+      getData: module.cwrap('ktx_get_data', 'number', ['number']),
+      getDataSize: module.cwrap('ktx_get_data_size', 'number', ['number']),
+      getWidth: module.cwrap('ktx_get_base_width', 'number', ['number']),
+      getHeight: module.cwrap('ktx_get_base_height', 'number', ['number']),
+      getLevels: module.cwrap('ktx_get_num_levels', 'number', ['number']),
+      getOffset: module.cwrap('ktx_get_image_offset', 'number', ['number', 'number', 'number', 'number']),
+      errorString: module.cwrap('ktxErrorString', 'string', ['number']),
+    };
+
+    if (this.config.verbose) {
+      console.log('[KTX2] cwrap API created:', Object.keys(api));
+    }
+
+    return api;
   }
 
   /**
@@ -869,133 +1249,152 @@ export class Ktx2ProgressiveLoader {
   }
 
   /**
-   * Transcode on main thread using libktx (embind C++ API)
+   * Transcode on main thread using libktx (cwrap C API)
+   * Based on working implementation from Ktx2ProgressiveVanilla.js
    */
   private transcodeMainThread(miniKtx: Uint8Array): Ktx2TranscodeResult {
-    if (!this.ktxModule) {
+    if (!this.ktxModule || !this.ktxApi) {
       throw new Error('libktx not initialized');
     }
 
     const heapBefore = this.ktxModule.HEAPU8.length;
+    const api = this.ktxApi;
+    const ktx = this.ktxModule;
 
-    let ktxTexture: any = null;
+    // Allocate memory for mini-KTX2 data
+    const ptr = api.malloc(miniKtx.byteLength);
+    if (!ptr) {
+      throw new Error('Failed to allocate WASM memory');
+    }
 
     try {
-      // Create texture from Uint8Array using embind C++ API
-      ktxTexture = new this.ktxModule.ktxTexture(miniKtx);
+      // Copy miniKtx data to WASM heap
+      ktx.HEAPU8.set(miniKtx, ptr);
 
-      if (this.config.verbose) {
-        console.log('[KTX2] Texture created from mini-KTX');
-        console.log('[KTX2] - Base dimensions:', ktxTexture.baseWidth, 'x', ktxTexture.baseHeight);
-        console.log('[KTX2] - Needs transcoding:', ktxTexture.needsTranscoding);
-        console.log('[KTX2] - GL format:', ktxTexture.glFormat);
-        console.log('[KTX2] - GL internal format:', ktxTexture.glInternalformat);
-        console.log('[KTX2] - GL base internal format:', ktxTexture.glBaseInternalformat);
-        console.log('[KTX2] - GL type:', ktxTexture.glType);
-        console.log('[KTX2] - Is compressed:', ktxTexture.isCompressed);
-        console.log('[KTX2] - Num levels:', ktxTexture.numLevels);
+      // Allocate pointer to receive texture pointer
+      const outPtrPtr = api.malloc(4);
+      if (!outPtrPtr) {
+        api.free(ptr);
+        throw new Error('Failed to allocate output pointer');
       }
 
-      // Check if transcoding is needed
-      if (ktxTexture.needsTranscoding) {
-        if (this.config.verbose) {
-          console.log('[KTX2] Starting transcoding to RGBA32...');
-          console.log('[KTX2] - TranscodeTarget type:', typeof this.ktxModule.TranscodeTarget);
-          console.log('[KTX2] - ErrorCode type:', typeof this.ktxModule.ErrorCode);
+      try {
+        // Create texture from memory
+        const rc = api.createFromMemory(ptr, miniKtx.byteLength, 0, outPtrPtr);
+
+        if (rc !== 0) {
+          const errorMsg = api.errorString ? api.errorString(rc) : `Error code ${rc}`;
+          throw new Error(`ktxTexture2_CreateFromMemory failed: ${errorMsg}`);
         }
 
-        // Transcode to RGBA32 (uncompressed)
-        // Note: TranscodeTarget might be a function or an object
-        let RGBA32_FORMAT: number;
-        if (typeof this.ktxModule.TranscodeTarget === 'function') {
-          RGBA32_FORMAT = 13; // RGBA32 constant from embind
-        } else {
-          RGBA32_FORMAT = this.ktxModule.TranscodeTarget.RGBA32 || 13;
+        // Read the texture pointer using getValue
+        const texPtr = ktx.getValue(outPtrPtr, '*');
+        api.free(outPtrPtr);
+
+        if (!texPtr) {
+          throw new Error('Texture pointer is null');
         }
 
-        const transcodeFlags = 0;
-
-        if (this.config.verbose) {
-          console.log('[KTX2] - Target format:', RGBA32_FORMAT);
-          console.log('[KTX2] - Flags:', transcodeFlags);
-        }
-
-        const transcodeResult = ktxTexture.transcodeBasis(RGBA32_FORMAT, transcodeFlags);
-
-        if (this.config.verbose) {
-          console.log('[KTX2] - Transcode result:', transcodeResult);
-          console.log('[KTX2] - Result type:', typeof transcodeResult);
-          console.log('[KTX2] - Result.value:', transcodeResult?.value);
-        }
-
-        // Check if transcoding succeeded
-        // embind returns an enum object with a 'value' property
-        const errorCode = typeof transcodeResult === 'object' && transcodeResult?.value !== undefined
-          ? transcodeResult.value
-          : transcodeResult;
-
-        if (errorCode !== 0) {
-          console.warn(`[KTX2] Transcode failed with error code: ${errorCode}`);
-          console.warn('[KTX2] This might be because libktx_read.wasm does not support transcoding.');
-          console.warn('[KTX2] Attempting to get data directly without transcoding...');
-
-          // Try to get data without transcoding (might work if already in uncompressed format)
-          // This will throw if the format is not supported
-        } else {
+        try {
           if (this.config.verbose) {
-            console.log('[KTX2] Transcoding succeeded');
+            const baseW = api.getWidth(texPtr);
+            const baseH = api.getHeight(texPtr);
+            console.log('[KTX2] Texture created from mini-KTX');
+            console.log('[KTX2] - Base dimensions:', baseW, 'x', baseH);
           }
+
+          // Check if transcoding is needed
+          const needsTranscode = api.needsTranscoding(texPtr);
+
+          if (needsTranscode) {
+            if (this.config.verbose) {
+              console.log('[KTX2] Starting transcoding to RGBA32...');
+            }
+
+            // Get RGBA32 format constant (value: 13)
+            const RGBA32_FORMAT = typeof this.ktxModule.TranscodeTarget === 'function'
+              ? 13
+              : (this.ktxModule.TranscodeTarget.RGBA32?.value ?? 13);
+
+            // Transcode to RGBA32
+            const rcT = api.transcode(texPtr, RGBA32_FORMAT, 0);
+
+            if (rcT !== 0) {
+              const errorMsg = api.errorString ? api.errorString(rcT) : `Error code ${rcT}`;
+              api.destroy(texPtr);
+              throw new Error(`Transcoding failed: ${errorMsg}`);
+            }
+
+            if (this.config.verbose) {
+              console.log('[KTX2] Transcoding succeeded');
+            }
+          }
+
+          // Get texture data
+          const dataPtr = api.getData(texPtr);
+          const baseW = api.getWidth(texPtr);
+          const baseH = api.getHeight(texPtr);
+          const dataSize = api.getDataSize(texPtr);
+
+          if (this.config.verbose) {
+            console.log('[KTX2] Getting texture data...');
+            console.log('[KTX2] - Dimensions:', baseW, 'x', baseH);
+            console.log('[KTX2] - Data size:', dataSize, 'bytes');
+            console.log('[KTX2] - Data pointer:', dataPtr);
+          }
+
+          // Calculate expected size
+          const expected = baseW * baseH * 4; // RGBA
+          const total = Math.min(expected, dataSize);
+
+          if (this.config.verbose) {
+            console.log('[KTX2] - Expected size:', expected, 'bytes');
+            console.log('[KTX2] - Copying', total, 'bytes from WASM heap');
+          }
+
+          // Copy data from WASM heap
+          const rgbaData = new Uint8Array(ktx.HEAPU8.buffer, dataPtr, total);
+          const dataCopy = new Uint8Array(rgbaData); // Make a copy to persist after destroy
+
+          if (this.config.verbose) {
+            console.log('[KTX2] - Data copied successfully');
+          }
+
+          // Cleanup texture
+          api.destroy(texPtr);
+
+          const heapAfter = ktx.HEAPU8.length;
+          const heapFreed = Math.max(0, heapBefore - heapAfter);
+
+          return {
+            width: baseW,
+            height: baseH,
+            data: dataCopy,
+            heapStats: {
+              before: heapBefore,
+              after: heapAfter,
+              freed: heapFreed,
+            },
+          };
+
+        } catch (innerError) {
+          // Cleanup texture on error
+          api.destroy(texPtr);
+          throw innerError;
         }
+
+      } catch (outPtrError) {
+        // outPtrPtr already freed or never allocated
+        throw outPtrError;
       }
-
-      // Get texture dimensions
-      const width = ktxTexture.baseWidth;
-      const height = ktxTexture.baseHeight;
-
-      if (this.config.verbose) {
-        console.log('[KTX2] Getting texture data...');
-        console.log('[KTX2] - Dimensions:', width, 'x', height);
-      }
-
-      // Get transcoded data (level 0, layer 0, face 0)
-      const rgbaData = ktxTexture.getData(0, 0, 0);
-
-      if (!rgbaData || rgbaData.length === 0) {
-        throw new Error('Failed to get texture data');
-      }
-
-      if (this.config.verbose) {
-        console.log('[KTX2] - Data size:', rgbaData.length, 'bytes');
-        console.log('[KTX2] - Expected size:', width * height * 4, 'bytes (RGBA)');
-      }
-
-      // Copy data to ensure it persists after texture.delete()
-      const dataCopy = new Uint8Array(rgbaData);
-
-      // Cleanup
-      ktxTexture.delete();
-      ktxTexture = null;
-
-      const heapAfter = this.ktxModule.HEAPU8.length;
-      const heapFreed = Math.max(0, heapBefore - heapAfter);
-
-      return {
-        width,
-        height,
-        data: dataCopy,
-        heapStats: {
-          before: heapBefore,
-          after: heapAfter,
-          freed: heapFreed,
-        },
-      };
 
     } catch (error) {
-      // Cleanup on error
-      if (ktxTexture) {
-        ktxTexture.delete();
-      }
+      // Cleanup input data on error
+      api.free(ptr);
       throw error;
+    } finally {
+      // Always free input data
+      api.free(ptr);
     }
   }
 
@@ -1021,8 +1420,75 @@ export class Ktx2ProgressiveLoader {
 
     texture.name = `ktx2_${probe.url.split('/').pop()}`;
 
+    // Initialize base mip level with placeholder data
+    // This is REQUIRED to create the WebGL texture object
+    // Without this, texture.impl._glTexture will be undefined
+    {
+      const initSize = probe.width * probe.height * 4;
+      const initData = new Uint8Array(initSize);
+      // Fill with gray color (128, 128, 128, 255)
+      for (let i = 0; i < initSize; i += 4) {
+        initData[i] = 128;     // R
+        initData[i + 1] = 128; // G
+        initData[i + 2] = 128; // B
+        initData[i + 3] = 255; // A
+      }
+      const pixels = texture.lock();
+      pixels.set(initData);
+      texture.unlock();
+    }
+
+    // Initialize all mipmap levels with placeholder data
+    // This ensures the WebGL texture is fully allocated
+    const device = this.app.graphicsDevice;
+    const gl = (device as any).gl as WebGL2RenderingContext | null;
+    const glTexture = (texture as any).impl?._glTexture;
+
+    if (gl && glTexture) {
+      const prevBinding = gl.getParameter(gl.TEXTURE_BINDING_2D);
+      gl.bindTexture(gl.TEXTURE_2D, glTexture);
+
+      // Initialize all mip levels > 0
+      for (let i = 1; i < probe.levelCount; i++) {
+        const mipWidth = Math.max(1, probe.width >> i);
+        const mipHeight = Math.max(1, probe.height >> i);
+        const mipSize = mipWidth * mipHeight * 4;
+        const mipData = new Uint8Array(mipSize);
+        // Fill with gray
+        for (let j = 0; j < mipSize; j += 4) {
+          mipData[j] = 128;
+          mipData[j + 1] = 128;
+          mipData[j + 2] = 128;
+          mipData[j + 3] = 255;
+        }
+        gl.texImage2D(gl.TEXTURE_2D, i, gl.RGBA, mipWidth, mipHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, mipData);
+      }
+
+      // Set base and max levels for progressive loading
+      // Start with the lowest quality mip (highest index)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_BASE_LEVEL, probe.levelCount - 1);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, probe.levelCount - 1);
+
+      // Enable anisotropic filtering if available
+      if (this.config.enableAniso) {
+        const ext = gl.getExtension('EXT_texture_filter_anisotropic') ||
+                    (gl as any).getExtension('WEBKIT_EXT_texture_filter_anisotropic') ||
+                    (gl as any).getExtension('MOZ_EXT_texture_filter_anisotropic');
+        if (ext) {
+          const maxAniso = gl.getParameter((ext as any).MAX_TEXTURE_MAX_ANISOTROPY_EXT) || 8;
+          gl.texParameterf(gl.TEXTURE_2D, (ext as any).TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, maxAniso));
+          if (this.config.verbose) {
+            console.log(`[KTX2] Anisotropy enabled: ${Math.min(8, maxAniso)}x`);
+          }
+        }
+      }
+
+      gl.bindTexture(gl.TEXTURE_2D, prevBinding);
+    }
+
     if (this.config.verbose) {
       console.log(`[KTX2] Created texture with format: ${useSrgb ? 'SRGBA8' : 'RGBA8'}`);
+      console.log(`[KTX2] Initialized ${probe.levelCount} mip levels with placeholder data`);
     }
 
     return texture;
@@ -1033,8 +1499,11 @@ export class Ktx2ProgressiveLoader {
    *
    * Note: This uses WebGL2 API directly for mipmap levels > 0
    * PlayCanvas 2.x supports WebGL2 only (WebGL1 support was removed in v2.0)
+   *
+   * @param minAvailableLod - Best quality level available (lowest number)
+   * @param maxAvailableLod - Worst quality level available (highest number)
    */
-  private uploadMipLevel(texture: pc.Texture, level: number, result: Ktx2TranscodeResult): void {
+  private uploadMipLevel(texture: pc.Texture, level: number, result: Ktx2TranscodeResult, minAvailableLod: number, maxAvailableLod: number): void {
     if (!result.data || result.data.length === 0) {
       console.error(`[KTX2] Cannot upload level ${level}: empty data`);
       return;
@@ -1049,6 +1518,34 @@ export class Ktx2ProgressiveLoader {
           pixels.set(result.data);
           texture.unlock();
         }
+
+        // Even for level 0, we need to update WebGL LOD parameters and shader uniforms
+        const device = this.app.graphicsDevice;
+        const gl = (device as any).gl as WebGL2RenderingContext | null;
+        if (gl) {
+          const webglTexture = (texture as any).impl?._glTexture;
+          if (webglTexture) {
+            const prevBinding = gl.getParameter(gl.TEXTURE_BINDING_2D);
+            gl.bindTexture(gl.TEXTURE_2D, webglTexture);
+
+            // Update WebGL LOD range
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_BASE_LEVEL, minAvailableLod);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, maxAvailableLod);
+
+            gl.bindTexture(gl.TEXTURE_2D, prevBinding);
+          }
+        }
+
+        // Update shader uniforms
+        const customMaterial = (this as any)._customMaterial;
+        if (customMaterial) {
+          customMaterial.setParameter('material_minAvailableLod', minAvailableLod);
+          customMaterial.setParameter('material_maxAvailableLod', maxAvailableLod);
+          customMaterial.update(); // Force shader update
+          if (this.config.verbose) {
+            console.log(`[KTX2] Updated LOD window: [${minAvailableLod}, ${maxAvailableLod}]`);
+          }
+        }
       } else {
         // For subsequent mip levels, we need to use WebGL2 directly
         // PlayCanvas doesn't expose a high-level API for uploading specific mip levels
@@ -1060,13 +1557,15 @@ export class Ktx2ProgressiveLoader {
           return;
         }
 
-        // Bind the texture
-        const webglTexture = (texture as any)._glTexture;
+        // Bind the texture - use impl._glTexture for PlayCanvas 2.12.4+
+        const webglTexture = (texture as any).impl?._glTexture;
         if (!webglTexture) {
-          console.error('[KTX2] WebGL texture not found');
+          console.error('[KTX2] WebGL texture not found - texture.impl may not be initialized');
           return;
         }
 
+        // Save previous binding to restore it later
+        const prevBinding = gl.getParameter(gl.TEXTURE_BINDING_2D);
         gl.bindTexture(gl.TEXTURE_2D, webglTexture);
 
         // Determine internal format based on texture format
@@ -1088,8 +1587,26 @@ export class Ktx2ProgressiveLoader {
           result.data
         );
 
-        // Unbind
-        gl.bindTexture(gl.TEXTURE_2D, null);
+        // Update LOD range to show progressively better quality
+        // We load from level 13 (1x1) down to level 0 (8192x8192)
+        // BASE_LEVEL = best quality available (minAvailableLod)
+        // MAX_LEVEL = worst quality available (maxAvailableLod)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_BASE_LEVEL, minAvailableLod);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, maxAvailableLod);
+
+        // Restore previous binding
+        gl.bindTexture(gl.TEXTURE_2D, prevBinding);
+
+        // Update shader uniform for LOD clamping
+        const customMaterial = (this as any)._customMaterial;
+        if (customMaterial) {
+          customMaterial.setParameter('material_minAvailableLod', minAvailableLod);
+          customMaterial.setParameter('material_maxAvailableLod', maxAvailableLod);
+          customMaterial.update(); // Force shader update
+          if (this.config.verbose) {
+            console.log(`[KTX2] Updated LOD window: [${minAvailableLod}, ${maxAvailableLod}]`);
+          }
+        }
       }
 
       if (this.config.verbose) {
@@ -1103,14 +1620,47 @@ export class Ktx2ProgressiveLoader {
     }
   }
 
-  private applyTextureToEntity(entity: pc.Entity, texture: pc.Texture): void {
-    const model = entity.model;
-    if (model && model.meshInstances && model.meshInstances.length > 0) {
-      const material = model.meshInstances[0].material as pc.StandardMaterial;
-      if (material) {
-        material.diffuseMap = texture;
-        material.update();
-      }
+  private applyTextureToEntity(entity: pc.Entity, texture: pc.Texture, totalLevels: number): void {
+    // Support both model and render components
+    const comp = entity.model || (entity as any).render;
+    if (!comp) {
+      console.error('[KTX2] Entity has neither model nor render component');
+      return;
+    }
+
+    if (!comp.meshInstances || comp.meshInstances.length === 0) {
+      console.error('[KTX2] Component has no mesh instances');
+      return;
+    }
+
+    const meshInstance = comp.meshInstances[0];
+    const originalMaterial = meshInstance.material as pc.StandardMaterial;
+    if (!originalMaterial) {
+      console.error('[KTX2] Mesh instance has no material');
+      return;
+    }
+
+    // Clone material to avoid modifying the original
+    const customMaterial = originalMaterial.clone();
+    customMaterial.diffuseMap = texture;
+
+    // Set initial LOD range uniforms (will be updated as levels load)
+    const minLod = totalLevels - 1; // Start with lowest quality
+    const maxLod = totalLevels - 1;
+
+    customMaterial.setParameter('material_minAvailableLod', minLod);
+    customMaterial.setParameter('material_maxAvailableLod', maxLod);
+    customMaterial.update();
+
+    // Apply custom material to mesh instance
+    meshInstance.material = customMaterial;
+
+    // Store reference for later updates
+    (this as any)._customMaterial = customMaterial;
+    (this as any)._activeTexture = texture;
+
+    if (this.config.verbose) {
+      console.log(`[KTX2] Texture applied to material with LOD uniforms [${minLod}, ${maxLod}]`);
     }
   }
 

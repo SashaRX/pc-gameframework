@@ -67,7 +67,7 @@ export class Ktx2LoaderScript extends Script {
         console.log('[KTX2] Searching for libktx assets...');
       }
 
-      const libktxMjsAsset = this.app.assets.find('libktx.mjs', 'script');
+      const libktxJsAsset = this.app.assets.find('libktx.mjs', 'script');
       // PlayCanvas определяет .wasm файлы как тип 'wasm', а не 'binary'
       let libktxWasmAsset = this.app.assets.find('libktx.wasm', 'wasm');
 
@@ -76,8 +76,8 @@ export class Ktx2LoaderScript extends Script {
         libktxWasmAsset = this.app.assets.find('libktx.wasm', 'binary');
       }
 
-      if (!libktxMjsAsset || !libktxWasmAsset) {
-        console.error('[KTX2] libktx.mjs found:', !!libktxMjsAsset);
+      if (!libktxJsAsset || !libktxWasmAsset) {
+        console.error('[KTX2] libktx.mjs found:', !!libktxJsAsset);
         console.error('[KTX2] libktx.wasm found:', !!libktxWasmAsset);
         console.error('[KTX2] Available asset types:', [...new Set(this.app.assets.list().map(a => a.type))]);
         throw new Error(
@@ -85,18 +85,18 @@ export class Ktx2LoaderScript extends Script {
         );
       }
 
-      const libktxMjsUrl = libktxMjsAsset.getFileUrl();
+      const libktxJsUrl = libktxJsAsset.getFileUrl();
       const libktxWasmUrl = libktxWasmAsset.getFileUrl();
 
       if (this.verbose) {
         console.log('[KTX2] Asset URLs:');
-        console.log('  - libktx.mjs:', libktxMjsUrl);
+        console.log('  - libktx.mjs:', libktxJsUrl);
         console.log('  - libktx.wasm:', libktxWasmUrl);
         console.log('[KTX2] Initializing loader...');
       }
 
       // Initialize loader
-      await this.loader.initialize(libktxMjsUrl, libktxWasmUrl);
+      await this.loader.initialize(libktxJsUrl, libktxWasmUrl);
 
       if (this.verbose) {
         console.log('[KTX2] Loader initialized successfully');

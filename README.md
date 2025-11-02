@@ -1,289 +1,137 @@
 # KTX2 Progressive Loader for PlayCanvas
 
-Progressive texture loading system with adaptive quality, HTTP range requests, and IndexedDB caching for PlayCanvas Engine.
+Progressive texture loading for PlayCanvas Engine 2.12.4+ with HTTP range requests, IndexedDB caching, and adaptive quality.
 
-## ✨ Features
+## Features
 
-- 🎯 **Progressive Loading** - Load textures from low to high resolution
-- 📡 **HTTP Range Requests** - Download only needed mipmap levels
-- 🎨 **Adaptive Quality** - Automatically select resolution based on screen size
-- 💾 **IndexedDB Caching** - Cache transcoded mipmaps for instant reloading
-- ⚡ **FPS Throttling** - Non-blocking loading with frame rate control
-- 🔍 **Verbose Logging** - Detailed statistics and progress tracking
-- 🎮 **PlayCanvas Editor** - Full integration with Editor workflow
+- Progressive loading from low to high resolution
+- HTTP Range requests for partial downloads
+- Adaptive quality based on screen size
+- IndexedDB caching for transcoded mipmaps
+- FPS throttling for non-blocking loading
+- Support for ETC1S (BasisLZ) and UASTC formats
+- Custom shader chunks for progressive LOD clamping
+- Anisotropic filtering support
 
-## 🚀 Quick Start
+## Quick Start
 
-### 1. Setup PlayCanvas Sync
+### 1. Build
 
-This project uses [playcanvas-sync][playcanvas-sync] to upload code to PlayCanvas Editor.
+```bash
+npm install
+npm run build:esm
+```
 
-1. **Install dependencies:**
-   ```bash
-   npm install
-   ```
+### 2. Upload to PlayCanvas
 
-2. **Configure PlayCanvas Sync:**
-   - Copy `.pcconfig` to your home directory (Mac: `/Users/<username>`, Windows: `C:/Users/<username>`)
-   - Copy `pcconfig.template.json` → `pcconfig.json`
-   - Fill in your project details in `pcconfig.json`:
-     - `PLAYCANVAS_API_KEY` - [Create API key][create-api-key]
-     - `PLAYCANVAS_PROJECT_ID` - [Find project ID][find-project-id]
-     - `PLAYCANVAS_BRANCH_ID` - [Find branch ID][find-branch-id]
+Upload from `build/esm/`:
 
-3. **Build and upload:**
-   ```bash
-   npm run build-push:debug
-   ```
-
-### 2. Upload Assets to PlayCanvas Editor
-
-**Two integration options available:**
-
-#### Option A: ESM Scripts (Recommended ✨)
-
-Upload these files from `build/esm/` folder:
-
-- ✅ `scripts/Ktx2LoaderScript.mjs` - Main script (ESM format)
-- ✅ `ktx2-loader/` - Loader modules folder (all .mjs files)
-- ✅ `libs/libktx/libktx.mjs` - KTX transcoding library
-- ✅ `libs/libktx/libktx.wasm` - WASM binary
-
-**Note:** The script will automatically search for `libktx.mjs` and `libktx.wasm` assets in PlayCanvas Editor by name, regardless of their folder location.
-
-**In PlayCanvas Editor:**
-- `scripts/Ktx2LoaderScript.mjs` → Type: **Script**
-- All `.mjs` files in `ktx2-loader/` → Type: **Script**
-- `libs/libktx/libktx.mjs` → Type: **Script**
-- `libs/libktx/libktx.wasm` → Type: **wasm** (or **binary** as fallback)
-
-#### Option B: AMD Bundle (Legacy)
-
-Upload from `build/` folder:
-
-- ✅ `main.bundle.js` - Single bundle file (auto-uploaded by playcanvas-sync)
-- ✅ `libktx.mjs` - KTX transcoding library
-- ✅ `libktx.wasm` - WASM binary
+- `scripts/Ktx2LoaderScript.mjs` - Type: Script
+- `ktx2-loader/*.mjs` - Type: Script (all files in folder)
+- `libs/libktx/libktx.mjs` - Type: Script
+- `libs/libktx/libktx.wasm` - Type: wasm (or binary)
 
 ### 3. Add Script to Entity
 
-1. **Create or select an Entity** in your scene (e.g., a plane or cube with a model)
-2. **Add Script Component** to the entity
-3. **Add Script** → Select **"ktx2Loader"**
-4. **Configure attributes** in Inspector:
-   - **KTX2 URL**: URL to your `.ktx2` file (e.g., `https://example.com/texture.ktx2`)
-   - **Progressive Loading**: ✅ Enable for progressive loading
-   - **Verbose Logging**: ✅ Enable to see detailed logs in console
-   - **Enable Cache**: ✅ Cache transcoded mipmaps in IndexedDB
-   - **Adaptive Loading**: ⬜ Enable to stop at screen resolution
+1. Select entity with model or render component
+2. Add Script Component
+3. Add Script: "ktx2Loader"
+4. Configure:
+   - KTX2 URL: `https://example.com/texture.ktx2`
+   - Progressive: true
+   - Verbose: true
+   - Enable Cache: true
 
 ### 4. Test
 
-Press **Launch** in PlayCanvas Editor and check the browser console for logs:
+Press Launch and check console for logs.
 
-```
-[KTX2] Initializing loader...
-[KTX2] Loader ready
-[KTX2] Probing: https://example.com/texture.ktx2
-[KTX2] HEAD response: { fileSize: "4.25 MB", supportsRanges: true }
-[KTX2] Probe complete: { size: "2048x2048", levels: 12, ... }
-[KTX2] Repacked level 11: { dimensions: "1x1", ... }
-[KTX2] Uploaded level 11 to GPU: 1x1 (4.00 KB)
-...
-[KTX2] Loading complete: { totalTime: "2.34s", levelsLoaded: 12, ... }
-```
-
-## 📖 Usage Examples
-
-### Basic Usage (Script Component)
-
-Attach the `ktx2Loader` script to any entity with a model component:
-
-```javascript
-// No code needed! Configure via Inspector attributes
-```
-
-### Programmatic Usage
-
-```typescript
-import { Ktx2ProgressiveLoader } from './ktx2-loader/Ktx2ProgressiveLoader';
-
-// Create loader
-const loader = new Ktx2ProgressiveLoader(app, {
-  ktxUrl: 'https://example.com/texture.ktx2',
-  progressive: true,
-  isSrgb: false,
-  verbose: true,
-  enableCache: true,
-  adaptiveLoading: false,
-  stepDelayMs: 150,
-});
-
-// Initialize
-await loader.initialize(
-  app.assets.find('libktx.mjs').getFileUrl(),
-  app.assets.find('libktx.wasm').getFileUrl()
-);
-
-// Load texture to entity
-const texture = await loader.loadToEntity(entity, {
-  onProgress: (level, total, info) => {
-    console.log(`Loading: ${level}/${total} - ${info.width}x${info.height}`);
-  },
-  onComplete: (stats) => {
-    console.log('Done!', stats);
-  },
-});
-
-// Cleanup when done
-loader.dispose();
-```
-
-## 🛠️ Configuration Options
+## Configuration
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `ktxUrl` | `string` | *required* | URL to KTX2 file |
-| `progressive` | `boolean` | `true` | Enable progressive loading |
-| `isSrgb` | `boolean` | `false` | Treat as sRGB (for albedo/diffuse) |
-| `verbose` | `boolean` | `true` | Enable detailed logging |
-| `enableCache` | `boolean` | `true` | Cache in IndexedDB |
-| `useWorker` | `boolean` | `true` | Use Web Worker (TODO) |
-| `adaptiveLoading` | `boolean` | `false` | Stop at screen resolution |
-| `adaptiveMargin` | `number` | `1.5` | Adaptive quality margin |
-| `stepDelayMs` | `number` | `150` | Delay between mipmap loads |
-| `minFrameInterval` | `number` | `16` | Min ms between frames (60fps) |
-| `maxRgbaBytes` | `number` | `64MB` | Max RGBA memory allowed |
-| `cacheMaxAgeDays` | `number` | `7` | Cache TTL in days |
+| ktxUrl | string | required | URL to KTX2 file |
+| progressive | boolean | true | Enable progressive loading |
+| isSrgb | boolean | false | sRGB color space |
+| verbose | boolean | true | Detailed logging |
+| enableCache | boolean | true | IndexedDB cache |
+| adaptiveLoading | boolean | false | Stop at screen resolution |
+| stepDelayMs | number | 150 | Delay between levels (ms) |
+| enableAniso | boolean | true | Anisotropic filtering |
 
-## 📦 Creating KTX2 Files
-
-Use [toktx](https://github.com/KhronosGroup/KTX-Software) from KTX-Software:
+## Creating KTX2 Files
 
 ```bash
-# BasisLZ supercompression (universal)
+# BasisLZ (ETC1S)
 toktx --bcmp --genmipmap texture.ktx2 input.png
 
 # UASTC (higher quality)
 toktx --uastc --uastc_quality 2 --genmipmap texture.ktx2 input.png
-
-# Test HTTP Range support
-curl -I https://your-server.com/texture.ktx2
-# Should return: Accept-Ranges: bytes
 ```
 
-**Recommended hosting:** CDN with HTTP Range support (Cloudflare, AWS S3, Vercel, etc.)
+Requires HTTP Range support on server (CDN, S3, etc).
 
-## 🐛 Troubleshooting
-
-### "libktx not initialized"
-- Ensure `libktx.mjs` and `libktx.wasm` are uploaded to PlayCanvas assets
-- Check that files are accessible via `app.assets.find('libktx.mjs')`
-
-### "HEAD request failed"
-- Server doesn't support HEAD requests → Loader will fallback to GET
-- Not critical, just less efficient
-
-### "Range request failed"
-- Server doesn't support HTTP Range header → Loader downloads full file
-- Still works, but loses progressive benefit
-
-### "Failed to project to screen space"
-- No camera in scene → Adaptive loading disabled
-- Entity has no mesh → Adaptive loading disabled
-
-## 🧪 Development
-
-### Build Commands
+## Build Commands
 
 | Command | Description |
 |---------|-------------|
-| `npm run build:debug` | Compile TypeScript (debug) |
-| `npm run build:release` | Compile TypeScript (release) |
-| `npm run watch:debug` | Watch mode (debug) |
+| `npm run build:esm` | Build ESM modules |
+| `npm run build:clean` | Clean build + rebuild |
+| `npm run watch:esm` | Watch mode ESM |
 | `npm run push` | Upload to PlayCanvas |
-| `npm run watch-push:debug` | Watch + auto-upload |
+| `npm run build-push:esm` | Build + upload |
 
-### Project Structure
+## Project Structure
 
 ```
-ktx2-progressive-loader-esm/
-├── src/
-│   ├── ktx2-loader/
-│   │   ├── Ktx2ProgressiveLoader.ts  # Main loader
-│   │   ├── KtxCacheManager.ts        # IndexedDB cache
-│   │   ├── types.ts                  # TypeScript types
-│   │   └── utils/
-│   │       ├── alignment.ts          # KTX2 alignment helpers
-│   │       └── colorspace.ts         # DFD parsing
-│   ├── scripts/
-│   │   └── Ktx2LoaderScript.ts       # PlayCanvas script component
-│   └── index.ts                      # Entry point (AMD bundle)
-├── build/esm/                        # ESM build output
-│   ├── scripts/
-│   │   └── Ktx2LoaderScript.mjs      # Compiled script
-│   ├── ktx2-loader/
-│   │   ├── Ktx2ProgressiveLoader.mjs # Compiled loader
-│   │   ├── KtxCacheManager.mjs       # Compiled cache manager
-│   │   └── utils/                    # Compiled utilities
-│   └── libs/
-│       └── libktx/
-│           ├── libktx.mjs            # Transcoding library
-│           └── libktx.wasm           # WASM binary
-└── lib/                              # Source libraries (WASM/JS)
+src/
+├── ktx2-loader/
+│   ├── Ktx2ProgressiveLoader.ts  # Main loader
+│   ├── KtxCacheManager.ts        # IndexedDB cache
+│   ├── types.ts                  # TypeScript types
+│   └── utils/
+│       ├── alignment.ts          # KTX2 alignment
+│       └── colorspace.ts         # DFD parsing
+├── scripts/
+│   └── Ktx2LoaderScriptESM.mjs   # PlayCanvas script
+build/esm/                        # Compiled output
+lib/                              # WASM/JS libraries
 ```
 
-## 📝 Implementation Status
+## Implementation Status
 
-### ✅ Milestone B - Core Functionality (COMPLETE)
-- ✅ B.1: HTTP Range requests + KTX2 header parsing
-- ✅ B.2: Mini-KTX2 repack for single levels
-- ✅ B.3: Adaptive loading strategy
-- ✅ B.4: Progressive loading loop
-- ✅ B.5: Transcoding + GPU upload
+### Working
+- HTTP Range requests + KTX2 header parsing
+- Mini-KTX2 repack for single levels (ETC1S + UASTC)
+- SGD repacking for ETC1S
+- Progressive loading with LOD clamping
+- GPU upload with WebGL2
+- Custom shader chunks
+- Adaptive loading
+- IndexedDB caching
+- Anisotropic filtering
 
-### 🚧 Milestone C - Performance (TODO)
-- ⏳ C.1: Web Worker for transcoding
-- ⏳ C.2: Enhanced FPS throttling
-- ⏳ C.3: Extended cache features
-- ⏳ C.4: HEAPU8 memory monitoring
+### TODO
+- Web Worker transcoding
+- Hardware compressed formats (ETC, ASTC, BC)
+- WebGPU backend
 
-### 🔮 Milestone E - Advanced (TODO)
-- ⏳ E.1: Hardware compressed formats (ETC, ASTC, BC)
-- ⏳ E.2: WebGPU backend support
+## Troubleshooting
 
-## 🤝 Contributing
+**"libktx not initialized"**
+- Upload `libktx.mjs` and `libktx.wasm` to PlayCanvas assets
 
-See [KTX2 Specification](https://registry.khronos.org/KTX/specs/2.0/ktxspec.v2.html) for format details.
+**"Range request failed"**
+- Server doesn't support HTTP Range header
+- Downloads full file (still works, less efficient)
 
-## 📚 References
+**Pixelated texture after full load**
+- Check `[KTX2] Updated LOD window: [0, N]` appears in logs
+- Verify all mip levels loaded successfully
+
+## References
 
 - [KTX2 Specification](https://registry.khronos.org/KTX/specs/2.0/ktxspec.v2.html)
 - [KTX-Software Tools](https://github.com/KhronosGroup/KTX-Software)
 - [PlayCanvas Engine](https://playcanvas.com/)
 - [Basis Universal](https://github.com/BinomialLLC/basis_universal)
-
-## Additional Notes
-
-⚠️ **Important:** When adding new `pc.ScriptTypes` or modifying script attributes, you must manually **Parse** the script in PlayCanvas Editor. [Read more][playcanvas-sync-new-script-types].
-
-## npm scripts
-
-| Command                      | Description                                                                                  |
-|------------------------------|----------------------------------------------------------------------------------------------|
-| `npm run build:debug`        | Compiles tsc files using debug config and builds to `build/main.bundle.js`                   |
-| `npm run build:release`      | Compiles tsc files using release config and builds to `build/main.bundle.js`                 |
-| `npm run watch:debug`        | Compiles tsc files using debug config on code changes and builds to `build/main.bundle.js`   |
-| `npm run watch:release`      | Compiles tsc files using release config on code changes and builds to `build/main.bundle.js` |
-| `npm run push`               | Uploads `build/main.bundle.js` to playcanvas.com project                                     |
-| `npm run build-push:debug`   | Performs `build:debug` and `push` npm scripts                                                |
-| `npm run build-push:release` | Performs `build:release` and `push` npm scripts                                              |
-| `npm run watch-push:debug`   | Performs `watch:debug` and `push` npm scripts                                                |
-| `npm run watch-push:release` | Performs `watch:release` and `push` npm scripts                                              |
-
-[playcanvas-sync]: https://github.com/playcanvas/playcanvas-sync
-[playcanvas-sync-pcconfig-instructions]: https://github.com/playcanvas/playcanvas-sync#config-variables
-[playcanvas-sync-new-script-types]: https://github.com/playcanvas/playcanvas-sync#adding-new-files-as-script-components
-[create-api-key]: https://developer.playcanvas.com/user-manual/api/#authorization
-[find-project-id]: https://developer.playcanvas.com/user-manual/api/#project_id
-[find-branch-id]: https://developer.playcanvas.com/user-manual/api/#branch_id

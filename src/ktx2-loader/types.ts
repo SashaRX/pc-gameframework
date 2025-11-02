@@ -201,101 +201,124 @@ export interface CachedMip {
 }
 
 // ============================================================================
-// KTX API (from libktx.mjs - embind C++ API)
+// KTX API (from libktx.mjs - cwrap C API)
 // ============================================================================
 
-export interface KtxTexture {
-  // Core properties
-  baseWidth: number;
-  baseHeight: number;
-  baseDepth: number;
-  numLevels: number;
-  numLayers: number;
-  numFaces: number;
-  numDimensions: number;
-
-  // Flags
-  isArray: boolean;
-  isCubemap: boolean;
-  isCompressed: boolean;
-  generateMipmaps: boolean;
-  needsTranscoding: boolean;
-
-  // OpenGL format info
-  glInternalformat: number;
-  glBaseInternalformat: number;
-  glFormat: number;
-  glType: number;
-
-  // Methods
-  transcodeBasis(format: number, flags: number): number;
-  getData(level: number, layer: number, face: number): Uint8Array;
-  getImageOffset(level: number, layer: number, face: number): number;
-  delete(): void;
+/**
+ * cwrap function wrappers for KTX C API
+ * These are created using Module.cwrap() during initialization
+ */
+export interface KtxApi {
+  malloc: (size: number) => number;
+  free: (ptr: number) => void;
+  createFromMemory: (dataPtr: number, dataSize: number, createFlags: number, outTexPtrPtr: number) => number;
+  destroy: (texPtr: number) => void;
+  transcode: (texPtr: number, format: number, flags: number) => number;
+  needsTranscoding: (texPtr: number) => number;
+  getData: (texPtr: number) => number;
+  getDataSize: (texPtr: number) => number;
+  getWidth: (texPtr: number) => number;
+  getHeight: (texPtr: number) => number;
+  getLevels: (texPtr: number) => number;
+  getOffset: (texPtr: number, level: number, layer: number, face: number) => number;
+  errorString: (errorCode: number) => string;
 }
 
-export interface KtxTextureConstructor {
-  new(data: Uint8Array): KtxTexture;
-}
-
+/**
+ * Emscripten Module interface with cwrap support
+ */
 export interface KtxModule {
-  // Constructor
-  ktxTexture: KtxTextureConstructor;
+  // cwrap utilities
+  cwrap: (
+    funcName: string,
+    returnType: string | null,
+    argTypes: string[]
+  ) => (...args: any[]) => any;
 
-  // Enums
+  ccall: (
+    funcName: string,
+    returnType: string | null,
+    argTypes: string[],
+    args: any[]
+  ) => any;
+
+  getValue: (ptr: number, type: string) => number;
+  setValue: (ptr: number, value: number, type: string) => void;
+
+  // Enums (from embind)
   ErrorCode: {
-    SUCCESS: number;
-    FILE_DATA_ERROR: number;
-    FILE_ISPIPE: number;
-    FILE_OPEN_FAILED: number;
-    FILE_OVERFLOW: number;
-    FILE_READ_ERROR: number;
-    FILE_SEEK_ERROR: number;
-    FILE_UNEXPECTED_EOF: number;
-    FILE_WRITE_ERROR: number;
-    GL_ERROR: number;
-    INVALID_OPERATION: number;
-    INVALID_VALUE: number;
-    NOT_FOUND: number;
-    OUT_OF_MEMORY: number;
-    TRANSCODE_FAILED: number;
-    UNKNOWN_FILE_FORMAT: number;
-    UNSUPPORTED_TEXTURE_TYPE: number;
-    UNSUPPORTED_FEATURE: number;
+    SUCCESS: { value: number };
+    FILE_DATA_ERROR: { value: number };
+    FILE_ISPIPE: { value: number };
+    FILE_OPEN_FAILED: { value: number };
+    FILE_OVERFLOW: { value: number };
+    FILE_READ_ERROR: { value: number };
+    FILE_SEEK_ERROR: { value: number };
+    FILE_UNEXPECTED_EOF: { value: number };
+    FILE_WRITE_ERROR: { value: number };
+    GL_ERROR: { value: number };
+    INVALID_OPERATION: { value: number };
+    INVALID_VALUE: { value: number };
+    NOT_FOUND: { value: number };
+    OUT_OF_MEMORY: { value: number };
+    TRANSCODE_FAILED: { value: number };
+    UNKNOWN_FILE_FORMAT: { value: number };
+    UNSUPPORTED_TEXTURE_TYPE: { value: number };
+    UNSUPPORTED_FEATURE: { value: number };
   };
 
   TranscodeTarget: {
-    ETC1_RGB: number;
-    ETC2_RGBA: number;
-    BC1_RGB: number;
-    BC3_RGBA: number;
-    BC4_R: number;
-    BC5_RG: number;
-    BC7_RGBA: number;
-    PVRTC1_4_RGB: number;
-    PVRTC1_4_RGBA: number;
-    ASTC_4x4_RGBA: number;
-    PVRTC2_4_RGB: number;
-    PVRTC2_4_RGBA: number;
-    ETC2_EAC_R11: number;
-    ETC2_EAC_RG11: number;
-    RGBA32: number;
-    RGB565: number;
-    BGR565: number;
-    RGBA4444: number;
+    ETC1_RGB: { value: number };
+    ETC2_RGBA: { value: number };
+    BC1_RGB: { value: number };
+    BC3_RGBA: { value: number };
+    BC4_R: { value: number };
+    BC5_RG: { value: number };
+    BC7_RGBA: { value: number };
+    PVRTC1_4_RGB: { value: number };
+    PVRTC1_4_RGBA: { value: number };
+    ASTC_4x4_RGBA: { value: number };
+    PVRTC2_4_RGB: { value: number };
+    PVRTC2_4_RGBA: { value: number };
+    ETC2_EAC_R11: { value: number };
+    ETC2_EAC_RG11: { value: number };
+    RGBA32: { value: number };
+    RGB565: { value: number };
+    BGR565: { value: number };
+    RGBA4444: { value: number };
   };
 
   TranscodeFlags: {
-    NONE: number;
-    HIGH_QUALITY: number;
+    NONE: { value: number };
+    HIGH_QUALITY: { value: number };
   };
 
-  // Memory
+  // Memory heap
   HEAPU8: Uint8Array;
+  HEAPU32: Uint32Array;
+  HEAP8: Int8Array;
+  HEAP16: Int16Array;
+  HEAP32: Int32Array;
 
-  // Utilities
-  _malloc?: (size: number) => number;
-  _free?: (ptr: number) => void;
+  // Low-level memory functions
+  _malloc: (size: number) => number;
+  _free: (ptr: number) => void;
+
+  // Legacy embind exports (for backward compatibility)
+  ktxTexture?: any;
+
+  // Direct C function exports
+  _ktxTexture2_CreateFromMemory?: (dataPtr: number, dataSize: number, createFlags: number, outTexPtrPtr: number) => number;
+  _ktxTexture2_Destroy?: (texPtr: number) => void;
+  _ktxTexture2_TranscodeBasis?: (texPtr: number, format: number, flags: number) => number;
+  _ktxTexture2_NeedsTranscoding?: (texPtr: number) => number;
+  _ktx_get_data?: (texPtr: number) => number;
+  _ktx_get_data_size?: (texPtr: number) => number;
+  _ktx_get_base_width?: (texPtr: number) => number;
+  _ktx_get_base_height?: (texPtr: number) => number;
+  _ktx_get_num_levels?: (texPtr: number) => number;
+  _ktx_get_image_offset?: (texPtr: number, level: number, layer: number, face: number) => number;
+  _ktxErrorString?: (errorCode: number) => number;
 }
 
 // ============================================================================
