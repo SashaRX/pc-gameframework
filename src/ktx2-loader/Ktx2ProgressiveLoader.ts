@@ -20,7 +20,6 @@ import type {
   LoadStats,
   MipLoadInfo,
   KtxModule,
-  KtxApi,
 } from './types';
 import { KtxCacheManager } from './KtxCacheManager';
 import { alignValue, readU64asNumber, writeU64 } from './utils/alignment';
@@ -41,8 +40,7 @@ export class Ktx2ProgressiveLoader {
   
   // KTX module (for main thread fallback)
   private ktxModule: KtxModule | null = null;
-  private ktxApi: KtxApi | null = null;
-  
+
   // Cache manager
   private cacheManager: KtxCacheManager | null = null;
   
@@ -370,6 +368,28 @@ export class Ktx2ProgressiveLoader {
 
       // Initialize the module
       const moduleConfig: any = {};
+
+      // Track runtime initialization
+      let runtimeInitialized = false;
+      const verbose = this.config.verbose;
+
+      // Add onRuntimeInitialized callback
+      // IMPORTANT: We override the default callback, so we need to manually set up the bindings
+      moduleConfig.onRuntimeInitialized = function(this: any) {
+        // Manually recreate the default libktx bindings (from libktx.mjs source)
+        // The default callback does: Module["ktxTexture"]=Module.texture; etc.
+        this.ktxTexture = this.texture;
+        this.ErrorCode = this.error_code;
+        this.TranscodeTarget = this.transcode_fmt;
+        this.TranscodeFlags = this.transcode_flag_bits;
+
+        runtimeInitialized = true;
+        if (verbose) {
+          console.log('[KTX2] onRuntimeInitialized callback fired');
+          console.log('[KTX2] Created bindings - ktxTexture:', typeof this.ktxTexture);
+        }
+      };
+
       if (libktxWasmUrl) {
         moduleConfig.locateFile = (filename: string) => {
           if (this.config.verbose) {
@@ -399,57 +419,58 @@ export class Ktx2ProgressiveLoader {
         throw new Error('Failed to create KTX module');
       }
 
+      // Wait for module to be fully ready (if it's a promise)
+      if (typeof (this.ktxModule as any).then === 'function') {
+        if (this.config.verbose) {
+          console.log('[KTX2] Module is a promise, waiting for initialization...');
+        }
+        this.ktxModule = await (this.ktxModule as any);
+      }
+
+      // Wait for WASM runtime initialization
+      // The ktxTexture constructor is created in onRuntimeInitialized callback
+      if (!runtimeInitialized) {
+        if (this.config.verbose) {
+          console.log('[KTX2] Waiting for WASM runtime initialization...');
+        }
+
+        // Create a promise that resolves when runtime is initialized
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error('WASM runtime initialization timeout after 10 seconds'));
+          }, 10000);
+
+          const checkInterval = setInterval(() => {
+            if (runtimeInitialized && this.ktxModule && this.ktxModule.ktxTexture) {
+              clearInterval(checkInterval);
+              clearTimeout(timeout);
+              if (this.config.verbose) {
+                console.log('[KTX2] WASM runtime initialized successfully');
+              }
+              resolve();
+            }
+          }, 50);
+        });
+      }
+
+      if (!this.ktxModule) {
+        throw new Error('Module lost during initialization');
+      }
+
       if (this.config.verbose) {
-        console.log('[KTX2] WASM module created, checking available methods...');
-        console.log('[KTX2] Module has cwrap:', typeof this.ktxModule.cwrap);
+        console.log('[KTX2] WASM module ready, checking available methods...');
+        console.log('[KTX2] Module has ktxTexture:', typeof this.ktxModule.ktxTexture);
+        console.log('[KTX2] Module has ErrorCode:', typeof this.ktxModule.ErrorCode);
+        console.log('[KTX2] Module has TranscodeTarget:', typeof this.ktxModule.TranscodeTarget);
         console.log('[KTX2] Module has HEAPU8:', typeof this.ktxModule.HEAPU8);
       }
 
-      // Wait for module to be fully ready
-      // Emscripten modules may need time to initialize
-      if (!this.ktxModule.cwrap) {
-        if (this.config.verbose) {
-          console.log('[KTX2] Module not ready, waiting for initialization...');
-        }
-        // If module is a promise, wait for it
-        if (typeof (this.ktxModule as any).then === 'function') {
-          this.ktxModule = await (this.ktxModule as any);
-        }
+      if (!this.ktxModule || !this.ktxModule.ktxTexture) {
+        throw new Error('Module does not have ktxTexture constructor - WASM not initialized properly');
       }
 
       if (this.config.verbose) {
-        console.log('[KTX2] Module ready, creating API wrappers...');
-      }
-
-      // Create API wrappers
-      const module = this.ktxModule;
-
-      if (!module || !module.cwrap) {
-        throw new Error('Module does not have cwrap - WASM not initialized properly');
-      }
-
-      this.ktxApi = {
-        malloc: module!.cwrap('malloc', 'number', ['number']) as (size: number) => number,
-        free: module!.cwrap('free', null, ['number']) as (ptr: number) => void,
-        createFromMemory: module!.cwrap('ktxTexture_CreateFromMemory', 'number', ['number', 'number', 'number', 'number']) as (data: number, size: number, flags: number, outPtr: number) => number,
-        destroy: module!.cwrap('ktxTexture_Destroy', null, ['number']) as (texPtr: number) => void,
-        transcode: module!.cwrap('ktxTexture2_TranscodeBasis', 'number', ['number', 'number', 'number']) as (texPtr: number, format: number, flags: number) => number,
-        needsTranscoding: module!.cwrap('ktxTexture2_NeedsTranscoding', 'number', ['number']) as (texPtr: number) => number,
-        getData: module!.cwrap('ktxTexture_GetData', 'number', ['number']) as (texPtr: number) => number,
-        getDataSize: module!.cwrap('ktxTexture_GetDataSize', 'number', ['number']) as (texPtr: number) => number,
-        getWidth: module!.cwrap('ktxTexture_GetBaseWidth', 'number', ['number']) as (texPtr: number) => number,
-        getHeight: module!.cwrap('ktxTexture_GetBaseHeight', 'number', ['number']) as (texPtr: number) => number,
-        errorString: (code: number) => `Error code: ${code}`,
-        HEAPU8: module!.HEAPU8,
-      };
-
-      if (this.config.verbose) {
-        console.log('[KTX2] API wrappers created successfully');
-        console.log('[KTX2] createFromMemory type:', typeof this.ktxApi.createFromMemory);
-      }
-
-      if (this.config.verbose) {
-        console.log('[KTX2] libktx module loaded successfully');
+        console.log('[KTX2] libktx module loaded successfully (embind C++ API)');
       }
     } catch (error) {
       console.error('[KTX2] Failed to load libktx module:', error);
@@ -840,7 +861,7 @@ export class Ktx2ProgressiveLoader {
    */
   private async transcode(miniKtx: Uint8Array): Promise<Ktx2TranscodeResult> {
     // For now, use main thread (worker implementation is TODO)
-    if (!this.ktxApi || !this.ktxModule) {
+    if (!this.ktxModule) {
       throw new Error('libktx not initialized. Call initialize() first.');
     }
 
@@ -848,82 +869,51 @@ export class Ktx2ProgressiveLoader {
   }
 
   /**
-   * Transcode on main thread using libktx
+   * Transcode on main thread using libktx (embind C++ API)
    */
   private transcodeMainThread(miniKtx: Uint8Array): Ktx2TranscodeResult {
-    if (!this.ktxApi || !this.ktxModule) {
+    if (!this.ktxModule) {
       throw new Error('libktx not initialized');
     }
 
     const heapBefore = this.ktxModule.HEAPU8.length;
 
-    // Allocate memory for the mini-KTX2 data
-    const dataPtr = this.ktxApi.malloc(miniKtx.byteLength);
-    if (!dataPtr) {
-      throw new Error('Failed to allocate memory for KTX2 data');
-    }
+    let ktxTexture: any = null;
 
     try {
-      // Copy mini-KTX2 data to WASM heap
-      this.ktxModule.HEAPU8.set(miniKtx, dataPtr);
-
-      // Create texture from memory
-      const texPtrPtr = this.ktxApi.malloc(4); // Pointer to pointer
-      const createFlags = 0; // KTX_TEXTURE_CREATE_NO_FLAGS
-
-      const createResult = this.ktxApi.createFromMemory(
-        dataPtr,
-        miniKtx.byteLength,
-        createFlags,
-        texPtrPtr
-      );
-
-      if (createResult !== 0) {
-        throw new Error(`ktxTexture_CreateFromMemory failed: ${this.ktxApi.errorString(createResult)}`);
-      }
-
-      // Get texture pointer
-      const texPtr = this.ktxModule.getValue(texPtrPtr, 'i32');
-      this.ktxApi.free(texPtrPtr);
-
-      if (!texPtr) {
-        throw new Error('Failed to get texture pointer');
-      }
+      // Create texture from Uint8Array using embind C++ API
+      ktxTexture = new this.ktxModule.ktxTexture(miniKtx);
 
       // Check if transcoding is needed
-      const needsTranscoding = this.ktxApi.needsTranscoding(texPtr);
-
-      if (needsTranscoding) {
-        // Transcode to RGBA32 (format 13 in libktx)
-        const RGBA32_FORMAT = 13;
+      if (ktxTexture.needsTranscoding) {
+        // Transcode to RGBA32 (uncompressed)
+        const RGBA32_FORMAT = this.ktxModule.TranscodeTarget.RGBA32;
         const transcodeFlags = 0;
 
-        const transcodeResult = this.ktxApi.transcode(texPtr, RGBA32_FORMAT, transcodeFlags);
+        const transcodeResult = ktxTexture.transcodeBasis(RGBA32_FORMAT, transcodeFlags);
 
-        if (transcodeResult !== 0) {
-          this.ktxApi.destroy(texPtr);
-          throw new Error(`ktxTexture2_TranscodeBasis failed: ${this.ktxApi.errorString(transcodeResult)}`);
+        if (transcodeResult !== this.ktxModule.ErrorCode.SUCCESS) {
+          throw new Error(`Transcode failed with error code: ${transcodeResult}`);
         }
       }
 
-      // Get transcoded data
-      const dataSize = this.ktxApi.getDataSize(texPtr);
-      const dataOffset = this.ktxApi.getData(texPtr);
-      const width = this.ktxApi.getWidth(texPtr);
-      const height = this.ktxApi.getHeight(texPtr);
+      // Get texture dimensions
+      const width = ktxTexture.baseWidth;
+      const height = ktxTexture.baseHeight;
 
-      if (!dataSize || !dataOffset) {
-        this.ktxApi.destroy(texPtr);
+      // Get transcoded data (level 0, layer 0, face 0)
+      const rgbaData = ktxTexture.getData(0, 0, 0);
+
+      if (!rgbaData || rgbaData.length === 0) {
         throw new Error('Failed to get texture data');
       }
 
-      // Copy data from WASM heap
-      const rgbaData = new Uint8Array(dataSize);
-      rgbaData.set(this.ktxModule.HEAPU8.subarray(dataOffset, dataOffset + dataSize));
+      // Copy data to ensure it persists after texture.delete()
+      const dataCopy = new Uint8Array(rgbaData);
 
       // Cleanup
-      this.ktxApi.destroy(texPtr);
-      this.ktxApi.free(dataPtr);
+      ktxTexture.delete();
+      ktxTexture = null;
 
       const heapAfter = this.ktxModule.HEAPU8.length;
       const heapFreed = Math.max(0, heapBefore - heapAfter);
@@ -931,7 +921,7 @@ export class Ktx2ProgressiveLoader {
       return {
         width,
         height,
-        data: rgbaData,
+        data: dataCopy,
         heapStats: {
           before: heapBefore,
           after: heapAfter,
@@ -941,7 +931,9 @@ export class Ktx2ProgressiveLoader {
 
     } catch (error) {
       // Cleanup on error
-      this.ktxApi.free(dataPtr);
+      if (ktxTexture) {
+        ktxTexture.delete();
+      }
       throw error;
     }
   }

@@ -201,28 +201,101 @@ export interface CachedMip {
 }
 
 // ============================================================================
-// KTX API (from libktx.mjs)
+// KTX API (from libktx.mjs - embind C++ API)
 // ============================================================================
 
-export interface KtxModule {
-  cwrap: (name: string, returnType: string | null, argTypes: string[]) => (...args: any[]) => any;
-  getValue: (ptr: number, type: string) => number;
-  HEAPU8: Uint8Array;
+export interface KtxTexture {
+  // Core properties
+  baseWidth: number;
+  baseHeight: number;
+  baseDepth: number;
+  numLevels: number;
+  numLayers: number;
+  numFaces: number;
+  numDimensions: number;
+
+  // Flags
+  isArray: boolean;
+  isCubemap: boolean;
+  isCompressed: boolean;
+  generateMipmaps: boolean;
+  needsTranscoding: boolean;
+
+  // OpenGL format info
+  glInternalformat: number;
+  glBaseInternalformat: number;
+  glFormat: number;
+  glType: number;
+
+  // Methods
+  transcodeBasis(format: number, flags: number): number;
+  getData(level: number, layer: number, face: number): Uint8Array;
+  getImageOffset(level: number, layer: number, face: number): number;
+  delete(): void;
 }
 
-export interface KtxApi {
-  malloc: (size: number) => number;
-  free: (ptr: number) => void;
-  createFromMemory: (data: number, size: number, flags: number, outPtr: number) => number;
-  destroy: (texPtr: number) => void;
-  transcode: (texPtr: number, format: number, flags: number) => number;
-  needsTranscoding: (texPtr: number) => number;
-  getData: (texPtr: number) => number;
-  getDataSize: (texPtr: number) => number;
-  getWidth: (texPtr: number) => number;
-  getHeight: (texPtr: number) => number;
-  errorString: (code: number) => string;
+export interface KtxTextureConstructor {
+  new(data: Uint8Array): KtxTexture;
+}
+
+export interface KtxModule {
+  // Constructor
+  ktxTexture: KtxTextureConstructor;
+
+  // Enums
+  ErrorCode: {
+    SUCCESS: number;
+    FILE_DATA_ERROR: number;
+    FILE_ISPIPE: number;
+    FILE_OPEN_FAILED: number;
+    FILE_OVERFLOW: number;
+    FILE_READ_ERROR: number;
+    FILE_SEEK_ERROR: number;
+    FILE_UNEXPECTED_EOF: number;
+    FILE_WRITE_ERROR: number;
+    GL_ERROR: number;
+    INVALID_OPERATION: number;
+    INVALID_VALUE: number;
+    NOT_FOUND: number;
+    OUT_OF_MEMORY: number;
+    TRANSCODE_FAILED: number;
+    UNKNOWN_FILE_FORMAT: number;
+    UNSUPPORTED_TEXTURE_TYPE: number;
+    UNSUPPORTED_FEATURE: number;
+  };
+
+  TranscodeTarget: {
+    ETC1_RGB: number;
+    ETC2_RGBA: number;
+    BC1_RGB: number;
+    BC3_RGBA: number;
+    BC4_R: number;
+    BC5_RG: number;
+    BC7_RGBA: number;
+    PVRTC1_4_RGB: number;
+    PVRTC1_4_RGBA: number;
+    ASTC_4x4_RGBA: number;
+    PVRTC2_4_RGB: number;
+    PVRTC2_4_RGBA: number;
+    ETC2_EAC_R11: number;
+    ETC2_EAC_RG11: number;
+    RGBA32: number;
+    RGB565: number;
+    BGR565: number;
+    RGBA4444: number;
+  };
+
+  TranscodeFlags: {
+    NONE: number;
+    HIGH_QUALITY: number;
+  };
+
+  // Memory
   HEAPU8: Uint8Array;
+
+  // Utilities
+  _malloc?: (size: number) => number;
+  _free?: (ptr: number) => void;
 }
 
 // ============================================================================
