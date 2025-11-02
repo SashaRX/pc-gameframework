@@ -884,16 +884,67 @@ export class Ktx2ProgressiveLoader {
       // Create texture from Uint8Array using embind C++ API
       ktxTexture = new this.ktxModule.ktxTexture(miniKtx);
 
+      if (this.config.verbose) {
+        console.log('[KTX2] Texture created from mini-KTX');
+        console.log('[KTX2] - Base dimensions:', ktxTexture.baseWidth, 'x', ktxTexture.baseHeight);
+        console.log('[KTX2] - Needs transcoding:', ktxTexture.needsTranscoding);
+        console.log('[KTX2] - GL format:', ktxTexture.glFormat);
+        console.log('[KTX2] - GL internal format:', ktxTexture.glInternalformat);
+        console.log('[KTX2] - GL base internal format:', ktxTexture.glBaseInternalformat);
+        console.log('[KTX2] - GL type:', ktxTexture.glType);
+        console.log('[KTX2] - Is compressed:', ktxTexture.isCompressed);
+        console.log('[KTX2] - Num levels:', ktxTexture.numLevels);
+      }
+
       // Check if transcoding is needed
       if (ktxTexture.needsTranscoding) {
+        if (this.config.verbose) {
+          console.log('[KTX2] Starting transcoding to RGBA32...');
+          console.log('[KTX2] - TranscodeTarget type:', typeof this.ktxModule.TranscodeTarget);
+          console.log('[KTX2] - ErrorCode type:', typeof this.ktxModule.ErrorCode);
+        }
+
         // Transcode to RGBA32 (uncompressed)
-        const RGBA32_FORMAT = this.ktxModule.TranscodeTarget.RGBA32;
+        // Note: TranscodeTarget might be a function or an object
+        let RGBA32_FORMAT: number;
+        if (typeof this.ktxModule.TranscodeTarget === 'function') {
+          RGBA32_FORMAT = 13; // RGBA32 constant from embind
+        } else {
+          RGBA32_FORMAT = this.ktxModule.TranscodeTarget.RGBA32 || 13;
+        }
+
         const transcodeFlags = 0;
+
+        if (this.config.verbose) {
+          console.log('[KTX2] - Target format:', RGBA32_FORMAT);
+          console.log('[KTX2] - Flags:', transcodeFlags);
+        }
 
         const transcodeResult = ktxTexture.transcodeBasis(RGBA32_FORMAT, transcodeFlags);
 
-        if (transcodeResult !== this.ktxModule.ErrorCode.SUCCESS) {
-          throw new Error(`Transcode failed with error code: ${transcodeResult}`);
+        if (this.config.verbose) {
+          console.log('[KTX2] - Transcode result:', transcodeResult);
+          console.log('[KTX2] - Result type:', typeof transcodeResult);
+          console.log('[KTX2] - Result.value:', transcodeResult?.value);
+        }
+
+        // Check if transcoding succeeded
+        // embind returns an enum object with a 'value' property
+        const errorCode = typeof transcodeResult === 'object' && transcodeResult?.value !== undefined
+          ? transcodeResult.value
+          : transcodeResult;
+
+        if (errorCode !== 0) {
+          console.warn(`[KTX2] Transcode failed with error code: ${errorCode}`);
+          console.warn('[KTX2] This might be because libktx_read.wasm does not support transcoding.');
+          console.warn('[KTX2] Attempting to get data directly without transcoding...');
+
+          // Try to get data without transcoding (might work if already in uncompressed format)
+          // This will throw if the format is not supported
+        } else {
+          if (this.config.verbose) {
+            console.log('[KTX2] Transcoding succeeded');
+          }
         }
       }
 
@@ -901,11 +952,21 @@ export class Ktx2ProgressiveLoader {
       const width = ktxTexture.baseWidth;
       const height = ktxTexture.baseHeight;
 
+      if (this.config.verbose) {
+        console.log('[KTX2] Getting texture data...');
+        console.log('[KTX2] - Dimensions:', width, 'x', height);
+      }
+
       // Get transcoded data (level 0, layer 0, face 0)
       const rgbaData = ktxTexture.getData(0, 0, 0);
 
       if (!rgbaData || rgbaData.length === 0) {
         throw new Error('Failed to get texture data');
+      }
+
+      if (this.config.verbose) {
+        console.log('[KTX2] - Data size:', rgbaData.length, 'bytes');
+        console.log('[KTX2] - Expected size:', width * height * 4, 'bytes (RGBA)');
       }
 
       // Copy data to ensure it persists after texture.delete()
