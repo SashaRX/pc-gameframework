@@ -9,6 +9,7 @@
 
 import * as pc from 'playcanvas';
 import { Ktx2ProgressiveLoader } from '../ktx2-loader/Ktx2ProgressiveLoader';
+import { normalizePlayCanvasAssetUrl } from '../utils/url';
 
 interface Ktx2LoaderScriptAttributes {
   ktxUrl: string;
@@ -41,18 +42,20 @@ class Ktx2LoaderScript extends pc.ScriptType {
     }
 
     const normalizeAssetUrl = (value: string | null | undefined): string | undefined => {
-      if (!value) {
+      const normalized = normalizePlayCanvasAssetUrl(value);
+
+      if (!normalized) {
         return undefined;
       }
 
       try {
         const base = typeof window !== 'undefined' && window.location ? window.location.href : undefined;
-        return new URL(value, base).href;
+        return new URL(normalized, base).href;
       } catch (error) {
         if (this.verbose) {
-          console.warn('[KTX2] Failed to normalize asset URL, using raw value:', value, error);
+          console.warn('[KTX2] Failed to normalize asset URL, using raw value:', normalized, error);
         }
-        return value;
+        return normalized;
       }
     };
 

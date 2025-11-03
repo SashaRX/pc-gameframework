@@ -25,6 +25,7 @@ import type {
 import { KtxCacheManager } from './KtxCacheManager';
 import { alignValue, readU64asNumber, writeU64 } from './utils/alignment';
 import { parseDFDColorSpace } from './utils/colorspace';
+import { normalizePlayCanvasAssetUrl } from '../utils/url';
 
 type LibktxFactory = (moduleConfig?: Record<string, unknown>) => Promise<KtxModule>;
 
@@ -822,13 +823,15 @@ void getAlbedo() {
   }
 
   private resolveAbsoluteUrl(url?: string): string | undefined {
-    if (!url) {
+    const normalized = normalizePlayCanvasAssetUrl(url);
+
+    if (!normalized) {
       return undefined;
     }
 
     // Already absolute (starts with a scheme)
-    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url)) {
-      return url;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(normalized)) {
+      return normalized;
     }
 
     const base = (() => {
@@ -845,16 +848,16 @@ void getAlbedo() {
     })();
 
     if (!base) {
-      return url;
+      return normalized;
     }
 
     try {
-      return new URL(url, base).href;
+      return new URL(normalized, base).href;
     } catch (error) {
       if (this.config.verbose) {
-        console.warn('[KTX2] Failed to resolve absolute URL, using raw value:', url, error);
+        console.warn('[KTX2] Failed to resolve absolute URL, using raw value:', normalized, error);
       }
-      return url;
+      return normalized;
     }
   }
 
