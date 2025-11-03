@@ -182,8 +182,11 @@ void getAlbedo() {
     this.libktxWasmUrls = this.resolveAbsoluteUrls(libktxWasmUrl);
 
     if (this.config.verbose) {
-      console.log('[KTX2] Resolved module URLs:', this.libktxModuleUrls.length ? this.libktxModuleUrls : ['(not provided)']);
-      console.log('[KTX2] Resolved WASM URLs:', this.libktxWasmUrls.length ? this.libktxWasmUrls : ['(not provided)']);
+      const moduleList = this.libktxModuleUrls.length ? this.libktxModuleUrls : ['(not provided)'];
+      const wasmList = this.libktxWasmUrls.length ? this.libktxWasmUrls : ['(not provided)'];
+
+      console.log('[KTX2] Resolved module URLs:', moduleList.join(', '));
+      console.log('[KTX2] Resolved WASM URLs:', wasmList.join(', '));
     }
 
     // Register custom shader chunk for progressive LOD clamping
@@ -493,8 +496,10 @@ void getAlbedo() {
 
     if (this.config.verbose) {
       console.log('[KTX2] Loading libktx module on main thread...');
-      console.log('[KTX2] Module URL candidates:', scriptCandidates.length ? scriptCandidates : ['(not provided)']);
-      console.log('[KTX2] WASM URL candidates:', wasmCandidates.length ? wasmCandidates : ['(not provided)']);
+      const scriptList = scriptCandidates.length ? scriptCandidates : ['(not provided)'];
+      const wasmList = wasmCandidates.length ? wasmCandidates : ['(not provided)'];
+      console.log('[KTX2] Module URL candidates:', scriptList.join(', '));
+      console.log('[KTX2] WASM URL candidates:', wasmList.join(', '));
     }
 
     try {

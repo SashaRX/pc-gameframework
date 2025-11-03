@@ -59,6 +59,32 @@ function sanitizePathSegments(segments: string[]): string[] {
   return sanitized;
 }
 
+function rewriteAppsHostUrl(parsed: URL): string | undefined {
+  const pathSegments = parsed.pathname.split('/').filter(Boolean);
+
+  if (!pathSegments.length) {
+    return undefined;
+  }
+
+  // Handle S3 proxy path: /apps.playcanvas.com/<buildId>/...
+  if (parsed.hostname.endsWith('amazonaws.com')) {
+    const appsIndex = pathSegments.indexOf('apps.playcanvas.com');
+
+    if (appsIndex !== -1 && pathSegments[appsIndex + 1]) {
+      const rewritten = new URL(parsed.href);
+      rewritten.hostname = 'apps.playcanvas.com';
+      rewritten.pathname = `/${pathSegments.slice(appsIndex + 1).join('/')}`;
+      return rewritten.href;
+    }
+  }
+
+  if (parsed.hostname === 'apps.playcanvas.com') {
+    return parsed.href;
+  }
+
+  return undefined;
+}
+
 export function normalizePlayCanvasAssetUrl(rawUrl?: string | null): string | undefined {
   if (!rawUrl) {
     return undefined;
@@ -72,7 +98,12 @@ export function normalizePlayCanvasAssetUrl(rawUrl?: string | null): string | un
   const location = getWindowLocation();
 
   if (!location || !/playcanv\.as$/i.test(location.hostname)) {
-    return trimmed;
+    try {
+      const parsed = new URL(trimmed);
+      return rewriteAppsHostUrl(parsed) ?? trimmed;
+    } catch {
+      return trimmed;
+    }
   }
 
   let parsed: URL;
@@ -120,7 +151,22 @@ export function normalizePlayCanvasAssetUrl(rawUrl?: string | null): string | un
 
   const sanitizedPath = sanitizedSegments.join('/');
 
-  return `${location.origin}/p/${buildId}/${sanitizedPath}${parsed.search}${parsed.hash}`;
+  const publishUrl = `${location.origin}/p/${buildId}/${sanitizedPath}${parsed.search}${parsed.hash}`;
+
+  return publishUrl;
+}
+
+export function buildPlayCanvasAppsHostUrl(rawUrl?: string | null): string | undefined {
+  if (!rawUrl) {
+    return undefined;
+  }
+
+  try {
+    const parsed = new URL(rawUrl);
+    return rewriteAppsHostUrl(parsed);
+  } catch {
+    return undefined;
+  }
 }
 
 function extractFilename(asset: PlayCanvasAssetLike | null | undefined, rawUrl?: string | null): string | undefined {

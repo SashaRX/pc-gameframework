@@ -9,7 +9,7 @@
 
 import * as pc from 'playcanvas';
 import { Ktx2ProgressiveLoader } from '../ktx2-loader/Ktx2ProgressiveLoader';
-import { buildPlayCanvasPublishAssetUrl, normalizePlayCanvasAssetUrl } from '../utils/url';
+import { buildPlayCanvasAppsHostUrl, buildPlayCanvasPublishAssetUrl, normalizePlayCanvasAssetUrl } from '../utils/url';
 
 interface Ktx2LoaderScriptAttributes {
   ktxUrl: string;
@@ -48,6 +48,7 @@ class Ktx2LoaderScript extends pc.ScriptType {
 
       const rawUrl = asset.getFileUrl?.() ?? undefined;
       const candidates: string[] = [];
+      const registryPrefix = typeof this.app.assets?.prefix === 'string' ? this.app.assets.prefix : undefined;
 
       const addCandidate = (value?: string | null) => {
         if (!value) {
@@ -68,7 +69,25 @@ class Ktx2LoaderScript extends pc.ScriptType {
         }
       };
 
+      const addWithPrefix = (value?: string | null) => {
+        if (!value) {
+          return;
+        }
+
+        try {
+          const base = registryPrefix ?? (typeof window !== 'undefined' && window.location ? `${window.location.origin}/` : undefined);
+          const resolved = base ? new URL(value, base).href : undefined;
+          addCandidate(resolved ?? value);
+        } catch (error) {
+          if (this.verbose) {
+            console.warn('[KTX2] Failed to resolve asset prefix URL:', value, error);
+          }
+        }
+      };
+
+      addWithPrefix(asset.file?.url as string | undefined);
       addCandidate(normalizePlayCanvasAssetUrl(rawUrl));
+      addCandidate(buildPlayCanvasAppsHostUrl(rawUrl));
       addCandidate(buildPlayCanvasPublishAssetUrl(asset, rawUrl));
       addCandidate(rawUrl);
 
