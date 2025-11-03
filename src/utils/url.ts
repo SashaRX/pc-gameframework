@@ -8,60 +8,70 @@ export function normalizePlayCanvasAssetUrl(rawUrl?: string | null): string | un
     return undefined;
   }
 
-  if (typeof window !== 'undefined') {
-    try {
-      const location = window.location;
+  if (typeof window === 'undefined') {
+    return normalized;
+  }
 
-      if (location && location.hostname === 'playcanv.as') {
-        const publishMatch = location.pathname.match(/^\/p\/([^/]+)\//);
+  const location = window.location;
 
-        if (publishMatch) {
-          const buildId = publishMatch[1];
+  if (!location) {
+    return normalized;
+  }
 
-          try {
-            const parsed = new URL(normalized);
+  const publishOrigin = location.origin;
+  const publishHost = location.hostname;
 
-            const hostname = parsed.hostname;
-            const pathSegments = parsed.pathname.split('/').filter(Boolean);
+  if (!/playcanv\.as$/i.test(publishHost)) {
+    return normalized;
+  }
 
-            let buildIndex = 0;
+  let parsed: URL;
 
-            if (hostname.endsWith('playcanvas.com')) {
-              buildIndex = 0;
-            } else if (
-              hostname.endsWith('amazonaws.com') &&
-              pathSegments.length >= 2 &&
-              pathSegments[0] === 'apps.playcanvas.com'
-            ) {
-              buildIndex = 1;
-            } else {
-              buildIndex = -1;
-            }
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    return normalized;
+  }
 
-            if (buildIndex >= 0 && pathSegments.length > buildIndex) {
-              const candidateBuildId = pathSegments[buildIndex];
+  const pathSegments = parsed.pathname.split('/').filter(Boolean);
 
-              if (candidateBuildId === buildId) {
-                const remainder = pathSegments
-                  .slice(buildIndex + 1)
-                  .filter(segment => segment !== '.')
-                  .join('/');
+  let buildId: string | undefined;
+  let remainderSegments: string[] | undefined;
 
-                if (remainder) {
-                  normalized = `${location.origin}/p/${buildId}/${remainder}${parsed.search}${parsed.hash}`;
-                }
-
-              }
-            }
-          } catch (absoluteError) {
-            // Ignore parsing failures for non-absolute URLs
-          }
-        }
-      }
-    } catch (error) {
-      // In non-browser or restricted environments, fall back to the original URL
+  if (parsed.hostname === 'apps.playcanvas.com' && pathSegments.length >= 2) {
+    buildId = pathSegments[0];
+    remainderSegments = pathSegments.slice(1);
+  } else if (parsed.hostname.endsWith('amazonaws.com') && pathSegments.length >= 3) {
+    if (pathSegments[0] === 'apps.playcanvas.com') {
+      buildId = pathSegments[1];
+      remainderSegments = pathSegments.slice(2);
     }
   }
 
-  return normalized;
+  if (!buildId || !remainderSegments?.length) {
+    return normalized;
+  }
+
+  const sanitizedSegments: string[] = [];
+
+  for (const segment of remainderSegments) {
+    if (!segment || segment === '.') {
+      continue;
+    }
+
+    if (segment === '..') {
+      sanitizedSegments.pop();
+      continue;
+    }
+
+    sanitizedSegments.push(segment);
+  }
+
+  if (!sanitizedSegments.length) {
+    return normalized;
+  }
+
+  const sanitizedPath = sanitizedSegments.join('/');
+
+  return `${publishOrigin}/p/${buildId}/${sanitizedPath}${parsed.search}${parsed.hash}`;
 }
