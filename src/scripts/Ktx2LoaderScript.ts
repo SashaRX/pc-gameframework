@@ -9,7 +9,7 @@
 
 import * as pc from 'playcanvas';
 import { Ktx2ProgressiveLoader } from '../ktx2-loader/Ktx2ProgressiveLoader';
-import { normalizePlayCanvasAssetUrl } from '../utils/url';
+import { buildPlayCanvasPublishAssetUrl, normalizePlayCanvasAssetUrl } from '../utils/url';
 
 interface Ktx2LoaderScriptAttributes {
   ktxUrl: string;
@@ -41,22 +41,38 @@ class Ktx2LoaderScript extends pc.ScriptType {
       console.log('[KTX2] Script initializing...');
     }
 
-    const normalizeAssetUrl = (value: string | null | undefined): string | undefined => {
-      const normalized = normalizePlayCanvasAssetUrl(value);
-
-      if (!normalized) {
-        return undefined;
+    const collectAssetUrlCandidates = (asset: pc.Asset | null | undefined): string[] => {
+      if (!asset) {
+        return [];
       }
 
-      try {
-        const base = typeof window !== 'undefined' && window.location ? window.location.href : undefined;
-        return new URL(normalized, base).href;
-      } catch (error) {
-        if (this.verbose) {
-          console.warn('[KTX2] Failed to normalize asset URL, using raw value:', normalized, error);
+      const rawUrl = asset.getFileUrl?.() ?? undefined;
+      const candidates: string[] = [];
+
+      const addCandidate = (value?: string | null) => {
+        if (!value) {
+          return;
         }
-        return normalized;
-      }
+
+        try {
+          const base = typeof window !== 'undefined' && window.location ? window.location.href : undefined;
+          const absolute = new URL(value, base).href;
+
+          if (!candidates.includes(absolute)) {
+            candidates.push(absolute);
+          }
+        } catch (error) {
+          if (this.verbose) {
+            console.warn('[KTX2] Failed to resolve asset URL candidate:', value, error);
+          }
+        }
+      };
+
+      addCandidate(normalizePlayCanvasAssetUrl(rawUrl));
+      addCandidate(buildPlayCanvasPublishAssetUrl(asset, rawUrl));
+      addCandidate(rawUrl);
+
+      return candidates;
     };
 
     // Создаём loader
@@ -93,21 +109,21 @@ class Ktx2LoaderScript extends pc.ScriptType {
         throw new Error('libktx assets not found! Please upload libktx.mjs and libktx.wasm to PlayCanvas Assets.');
       }
 
-      const libktxMjsUrl = normalizeAssetUrl(libktxMjsAsset.getFileUrl());
-      const libktxWasmUrl = normalizeAssetUrl(libktxWasmAsset.getFileUrl());
+      const libktxMjsUrls = collectAssetUrlCandidates(libktxMjsAsset);
+      const libktxWasmUrls = collectAssetUrlCandidates(libktxWasmAsset);
 
-      if (!libktxMjsUrl || !libktxWasmUrl) {
+      if (!libktxMjsUrls.length || !libktxWasmUrls.length) {
         throw new Error('Failed to resolve libktx asset URLs. Check preload settings and permissions.');
       }
 
       if (this.verbose) {
         console.log('[KTX2] Asset URLs:');
-        console.log('  - libktx.mjs:', libktxMjsUrl);
-        console.log('  - libktx.wasm:', libktxWasmUrl);
+        console.log('  - libktx.mjs:', libktxMjsUrls);
+        console.log('  - libktx.wasm:', libktxWasmUrls);
         console.log('[KTX2] Initializing loader...');
       }
 
-      await this.loader.initialize(libktxMjsUrl, libktxWasmUrl);
+      await this.loader.initialize(libktxMjsUrls, libktxWasmUrls);
 
       if (this.verbose) {
         console.log('[KTX2] Loader initialized successfully');

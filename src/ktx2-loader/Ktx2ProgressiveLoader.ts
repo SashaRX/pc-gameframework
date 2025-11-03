@@ -58,8 +58,10 @@ export class Ktx2ProgressiveLoader {
   private initializationPromise: Promise<void> | null = null;
 
   // Cached libktx factory import
-  private libktxFactoryPromise: Promise<LibktxFactory> | null = null;
-  private libktxFactoryUrl: string | null = null;
+  private libktxFactoryCache = new Map<string, Promise<LibktxFactory>>();
+
+  private libktxModuleUrls: string[] = [];
+  private libktxWasmUrls: string[] = [];
 
   constructor(app: pc.Application, config: Ktx2LoaderConfig) {
     this.app = app;
@@ -142,7 +144,10 @@ void getAlbedo() {
   /**
    * Initialize the loader (load libktx, setup worker, init cache)
    */
-  async initialize(libktxModuleUrl?: string, libktxWasmUrl?: string): Promise<void> {
+  async initialize(
+    libktxModuleUrl?: string | string[],
+    libktxWasmUrl?: string | string[],
+  ): Promise<void> {
     if (this.initializationPromise) {
       if (this.config.verbose) {
         console.log('[KTX2] initialize() called again, waiting for existing initialization');
@@ -165,17 +170,20 @@ void getAlbedo() {
     return this.initializationPromise;
   }
 
-  private async performInitialization(libktxModuleUrl?: string, libktxWasmUrl?: string): Promise<void> {
+  private async performInitialization(
+    libktxModuleUrl?: string | string[],
+    libktxWasmUrl?: string | string[],
+  ): Promise<void> {
     if (this.config.verbose) {
       console.log('[KTX2] Initializing loader...');
     }
 
-    const resolvedModuleUrl = this.resolveAbsoluteUrl(libktxModuleUrl);
-    const resolvedWasmUrl = this.resolveAbsoluteUrl(libktxWasmUrl);
+    this.libktxModuleUrls = this.resolveAbsoluteUrls(libktxModuleUrl);
+    this.libktxWasmUrls = this.resolveAbsoluteUrls(libktxWasmUrl);
 
     if (this.config.verbose) {
-      console.log('[KTX2] Resolved module URL:', resolvedModuleUrl ?? '(not provided)');
-      console.log('[KTX2] Resolved WASM URL:', resolvedWasmUrl ?? '(not provided)');
+      console.log('[KTX2] Resolved module URLs:', this.libktxModuleUrls.length ? this.libktxModuleUrls : ['(not provided)']);
+      console.log('[KTX2] Resolved WASM URLs:', this.libktxWasmUrls.length ? this.libktxWasmUrls : ['(not provided)']);
     }
 
     // Register custom shader chunk for progressive LOD clamping
@@ -196,7 +204,7 @@ void getAlbedo() {
 
     // Initialize worker
     if (this.config.useWorker) {
-      const success = await this.initWorker(resolvedModuleUrl, resolvedWasmUrl);
+      const success = await this.initWorker(this.libktxModuleUrls[0], this.libktxWasmUrls[0]);
       if (!success && this.config.verbose) {
         console.warn('[KTX2] Worker initialization failed, will use main thread');
       }
@@ -204,7 +212,7 @@ void getAlbedo() {
 
     // Fallback: initialize main thread module
     if (!this.config.useWorker || !this.workerReady) {
-      await this.initMainThreadModule(resolvedModuleUrl, resolvedWasmUrl);
+      await this.initMainThreadModule(this.libktxModuleUrls, this.libktxWasmUrls);
     }
 
     if (this.config.verbose) {
@@ -462,7 +470,10 @@ void getAlbedo() {
   /**
    * Initialize libktx module on main thread (fallback when worker is disabled)
    */
-  private async initMainThreadModule(libktxModuleUrl?: string, libktxWasmUrl?: string): Promise<void> {
+  private async initMainThreadModule(
+    libktxModuleUrl?: string | string[],
+    libktxWasmUrl?: string | string[],
+  ): Promise<void> {
     if (this.ktxModule) {
       if (this.config.verbose) {
         console.log('[KTX2] libktx module already initialized on main thread, skipping re-import');
@@ -470,28 +481,30 @@ void getAlbedo() {
       return;
     }
 
-    const scriptUrl = this.resolveAbsoluteUrl(libktxModuleUrl);
-    const wasmUrl = this.resolveAbsoluteUrl(libktxWasmUrl);
+    const scriptCandidates = this.libktxModuleUrls.length
+      ? this.libktxModuleUrls
+      : this.resolveAbsoluteUrls(libktxModuleUrl);
+    const wasmCandidates = this.libktxWasmUrls.length
+      ? this.libktxWasmUrls
+      : this.resolveAbsoluteUrls(libktxWasmUrl);
+
+    const scriptUrl = scriptCandidates[0];
+    const wasmUrl = wasmCandidates[0];
 
     if (this.config.verbose) {
       console.log('[KTX2] Loading libktx module on main thread...');
-      console.log('[KTX2] Module URL:', scriptUrl ?? '(not provided)');
-      console.log('[KTX2] WASM URL:', wasmUrl ?? '(not provided)');
+      console.log('[KTX2] Module URL candidates:', scriptCandidates.length ? scriptCandidates : ['(not provided)']);
+      console.log('[KTX2] WASM URL candidates:', wasmCandidates.length ? wasmCandidates : ['(not provided)']);
     }
 
     try {
       // Fetch and evaluate libktx.mjs as a script
       // This works in AMD/PlayCanvas environment
-      if (!scriptUrl) {
+      if (!scriptCandidates.length) {
         throw new Error('libktxModuleUrl is required. Pass app.assets.find("libktx.mjs").getFileUrl()');
       }
 
-      // Load the script and get the factory function
-      if (this.config.verbose) {
-        console.log('[KTX2] Loading libktx script from:', scriptUrl);
-      }
-
-      const createKtxModule = await this.loadLibktxScript(scriptUrl);
+      const createKtxModule = await this.loadLibktxScript(scriptCandidates);
 
       if (this.config.verbose) {
         console.log('[KTX2] Script loaded, creating module instance...');
@@ -733,69 +746,81 @@ void getAlbedo() {
    * Load libktx.mjs script dynamically using ES module import
    * Works in PlayCanvas 2.x ESM environment
    */
-  private async loadLibktxScript(url: string): Promise<LibktxFactory> {
-    const resolvedUrl = this.resolveAbsoluteUrl(url);
-
-    if (!resolvedUrl) {
+  private async loadLibktxScript(urls: string[]): Promise<LibktxFactory> {
+    if (!urls.length) {
       throw new Error('libktx module URL is empty');
     }
 
-    if (this.libktxFactoryPromise && this.libktxFactoryUrl === resolvedUrl) {
+    for (const candidate of urls) {
+      if (!candidate) {
+        continue;
+      }
+
+      const resolvedUrl = this.resolveAbsoluteUrl(candidate);
+
+      if (!resolvedUrl) {
+        continue;
+      }
+
+      if (this.libktxFactoryCache.has(resolvedUrl)) {
+        if (this.config.verbose) {
+          console.log('[KTX2] Reusing cached libktx module factory for:', resolvedUrl);
+        }
+        return this.libktxFactoryCache.get(resolvedUrl)!;
+      }
+
       if (this.config.verbose) {
-        console.log('[KTX2] Reusing cached libktx module factory');
+        console.log('[KTX2] Importing libktx module via dynamic import...');
+        console.log('[KTX2] Dynamic import URL:', resolvedUrl);
       }
-      return this.libktxFactoryPromise;
-    }
 
-    if (this.config.verbose) {
-      console.log('[KTX2] Importing libktx module via dynamic import...');
-      console.log('[KTX2] Dynamic import URL:', resolvedUrl);
-    }
+      const importPromise: Promise<LibktxFactory> = (async () => {
+        try {
+          const module = await import(/* webpackIgnore: true */ resolvedUrl);
 
-    const importPromise: Promise<LibktxFactory> = (async () => {
+          if (this.config.verbose) {
+            console.log('[KTX2] Module imported successfully');
+            console.log('[KTX2] Module exports:', Object.keys(module));
+          }
+
+          const exportsToCheck: Array<unknown> = [
+            (module as { default?: unknown }).default,
+            (module as { createKtxModule?: unknown }).createKtxModule,
+            module,
+          ];
+
+          const createModule = exportsToCheck.find((candidateExport) => typeof candidateExport === 'function') as
+            | LibktxFactory
+            | undefined;
+
+          if (!createModule) {
+            throw new Error('No default export found in libktx module');
+          }
+
+          if (this.config.verbose) {
+            console.log('[KTX2] Got module factory function');
+          }
+
+          return createModule;
+        } catch (error) {
+          await this.logLibktxImportFailure(resolvedUrl, error);
+          throw error;
+        }
+      })();
+
+      this.libktxFactoryCache.set(resolvedUrl, importPromise);
+
       try {
-        const module = await import(/* webpackIgnore: true */ resolvedUrl);
-
-        if (this.config.verbose) {
-          console.log('[KTX2] Module imported successfully');
-          console.log('[KTX2] Module exports:', Object.keys(module));
-        }
-
-        const candidates: Array<unknown> = [
-          (module as { default?: unknown }).default,
-          (module as { createKtxModule?: unknown }).createKtxModule,
-          module,
-        ];
-
-        const createModule = candidates.find((candidate) => typeof candidate === 'function') as LibktxFactory | undefined;
-
-        if (!createModule) {
-          throw new Error('No default export found in libktx module');
-        }
-
-        if (this.config.verbose) {
-          console.log('[KTX2] Got module factory function');
-        }
-
-        return createModule;
+        return await importPromise;
       } catch (error) {
-        await this.logLibktxImportFailure(resolvedUrl, error);
-        throw error;
+        if (this.config.verbose) {
+          console.warn('[KTX2] Failed to import libktx module from candidate:', resolvedUrl, error);
+        }
+        this.libktxFactoryCache.delete(resolvedUrl);
       }
-    })();
-
-    this.libktxFactoryPromise = importPromise;
-    this.libktxFactoryUrl = resolvedUrl;
-
-    try {
-      return await importPromise;
-    } catch (error) {
-      if (this.libktxFactoryUrl === resolvedUrl) {
-        this.libktxFactoryPromise = null;
-        this.libktxFactoryUrl = null;
-      }
-      throw error;
     }
+
+    throw new Error('Failed to import libktx module from provided URLs');
   }
 
   private async logLibktxImportFailure(url: string, error: unknown): Promise<void> {
@@ -859,6 +884,21 @@ void getAlbedo() {
       }
       return normalized;
     }
+  }
+
+  private resolveAbsoluteUrls(url?: string | string[]): string[] {
+    const values = Array.isArray(url) ? url : url ? [url] : [];
+    const resolved: string[] = [];
+
+    for (const value of values) {
+      const absolute = this.resolveAbsoluteUrl(value);
+
+      if (absolute && !resolved.includes(absolute)) {
+        resolved.push(absolute);
+      }
+    }
+
+    return resolved;
   }
 
   /**
