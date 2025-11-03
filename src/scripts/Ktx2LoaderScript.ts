@@ -35,97 +35,114 @@ class Ktx2LoaderScript extends pc.ScriptType {
   adaptiveLoading!: boolean;
   stepDelayMs!: number;
 
-	async initialize() {
-	  if (this.verbose) {
-		console.log('[KTX2] Script initializing...');
-	  }
+  async initialize() {
+    if (this.verbose) {
+      console.log('[KTX2] Script initializing...');
+    }
 
-	  // Создаём loader
-	  this.loader = new Ktx2ProgressiveLoader(this.app as any, {
-		ktxUrl: this.ktxUrl,
-		progressive: this.progressive,
-		isSrgb: this.isSrgb,
-		verbose: this.verbose,
-		enableCache: this.enableCache,
-		useWorker: this.useWorker,
-		adaptiveLoading: this.adaptiveLoading,
-		stepDelayMs: this.stepDelayMs,
-	  });
+    const normalizeAssetUrl = (value: string | null | undefined): string | undefined => {
+      if (!value) {
+        return undefined;
+      }
 
-	  try {
-		// Find libktx assets with proper type checking
-		if (this.verbose) {
-		  console.log('[KTX2] Searching for libktx assets...');
-		}
+      try {
+        const base = typeof window !== 'undefined' && window.location ? window.location.href : undefined;
+        return new URL(value, base).href;
+      } catch (error) {
+        if (this.verbose) {
+          console.warn('[KTX2] Failed to normalize asset URL, using raw value:', value, error);
+        }
+        return value;
+      }
+    };
 
-		const libktxMjsAsset = this.app.assets.find('libktx.mjs', 'script');
-		// PlayCanvas определяет .wasm файлы как тип 'wasm', а не 'binary'
-		let libktxWasmAsset = this.app.assets.find('libktx.wasm', 'wasm');
+    // Создаём loader
+    this.loader = new Ktx2ProgressiveLoader(this.app as any, {
+      ktxUrl: this.ktxUrl,
+      progressive: this.progressive,
+      isSrgb: this.isSrgb,
+      verbose: this.verbose,
+      enableCache: this.enableCache,
+      useWorker: this.useWorker,
+      adaptiveLoading: this.adaptiveLoading,
+      stepDelayMs: this.stepDelayMs,
+    });
 
-		// Fallback: попробовать найти как binary на случай если тип изменён вручную
-		if (!libktxWasmAsset) {
-		  libktxWasmAsset = this.app.assets.find('libktx.wasm', 'binary');
-		}
+    try {
+      // Find libktx assets with proper type checking
+      if (this.verbose) {
+        console.log('[KTX2] Searching for libktx assets...');
+      }
 
-		if (!libktxMjsAsset || !libktxWasmAsset) {
-		  console.error('[KTX2] libktx.mjs found:', !!libktxMjsAsset);
-		  console.error('[KTX2] libktx.wasm found:', !!libktxWasmAsset);
-		  console.error('[KTX2] Available asset types:', [...new Set(this.app.assets.list().map(a => a.type))]);
-		  throw new Error(
-			'libktx assets not found! Please upload libktx.mjs and libktx.wasm to PlayCanvas Assets.'
-		  );
-		}
+      const libktxMjsAsset = this.app.assets.find('libktx.mjs', 'script');
+      // PlayCanvas определяет .wasm файлы как тип 'wasm', а не 'binary'
+      let libktxWasmAsset = this.app.assets.find('libktx.wasm', 'wasm');
 
-		const libktxMjsUrl = libktxMjsAsset.getFileUrl() || undefined;
-		const libktxWasmUrl = libktxWasmAsset.getFileUrl() || undefined;
+      // Fallback: попробовать найти как binary на случай если тип изменён вручную
+      if (!libktxWasmAsset) {
+        libktxWasmAsset = this.app.assets.find('libktx.wasm', 'binary');
+      }
 
-		if (this.verbose) {
-		  console.log('[KTX2] Asset URLs:');
-		  console.log('  - libktx.mjs:', libktxMjsUrl);
-		  console.log('  - libktx.wasm:', libktxWasmUrl);
-		  console.log('[KTX2] Initializing loader...');
-		}
+      if (!libktxMjsAsset || !libktxWasmAsset) {
+        console.error('[KTX2] libktx.mjs found:', !!libktxMjsAsset);
+        console.error('[KTX2] libktx.wasm found:', !!libktxWasmAsset);
+        console.error('[KTX2] Available asset types:', [...new Set(this.app.assets.list().map(a => a.type))]);
+        throw new Error('libktx assets not found! Please upload libktx.mjs and libktx.wasm to PlayCanvas Assets.');
+      }
 
-		await this.loader.initialize(libktxMjsUrl, libktxWasmUrl);
+      const libktxMjsUrl = normalizeAssetUrl(libktxMjsAsset.getFileUrl());
+      const libktxWasmUrl = normalizeAssetUrl(libktxWasmAsset.getFileUrl());
 
-		if (this.verbose) {
-		  console.log('[KTX2] Loader initialized successfully');
-		}
+      if (!libktxMjsUrl || !libktxWasmUrl) {
+        throw new Error('Failed to resolve libktx asset URLs. Check preload settings and permissions.');
+      }
 
-		// Загрузка текстуры
-		this.texture = await this.loader.loadToEntity(this.entity, {
-		  onProgress: (level, total, info) => {
-			if (this.verbose) {
-			  console.log(`[Ktx2LoaderScript] Progress: ${level}/${total}`, info);
-			}
-			
-			// Можно отправить event для UI
-			this.app.fire('ktx2:progress', {
-			  level,
-			  total,
-			  percent: (level / total) * 100,
-			  info,
-			});
-		  },
-		  
-		  onComplete: (stats) => {
-			if (this.verbose) {
-			  console.log('[Ktx2LoaderScript] Complete!', stats);
-			}
-			
-			this.app.fire('ktx2:complete', stats);
-		  },
-		});
+      if (this.verbose) {
+        console.log('[KTX2] Asset URLs:');
+        console.log('  - libktx.mjs:', libktxMjsUrl);
+        console.log('  - libktx.wasm:', libktxWasmUrl);
+        console.log('[KTX2] Initializing loader...');
+      }
 
-		if (this.verbose) {
-		  console.log('[Ktx2LoaderScript] Texture loaded successfully');
-		}
+      await this.loader.initialize(libktxMjsUrl, libktxWasmUrl);
 
-	  } catch (error) {
-		console.error('[Ktx2LoaderScript] Error:', error);
-		this.app.fire('ktx2:error', error);
-	  }
-	}
+      if (this.verbose) {
+        console.log('[KTX2] Loader initialized successfully');
+      }
+
+      // Загрузка текстуры
+      this.texture = await this.loader.loadToEntity(this.entity, {
+        onProgress: (level, total, info) => {
+          if (this.verbose) {
+            console.log(`[Ktx2LoaderScript] Progress: ${level}/${total}`, info);
+          }
+
+          // Можно отправить event для UI
+          this.app.fire('ktx2:progress', {
+            level,
+            total,
+            percent: (level / total) * 100,
+            info,
+          });
+        },
+
+        onComplete: (stats) => {
+          if (this.verbose) {
+            console.log('[Ktx2LoaderScript] Complete!', stats);
+          }
+
+          this.app.fire('ktx2:complete', stats);
+        },
+      });
+
+      if (this.verbose) {
+        console.log('[Ktx2LoaderScript] Texture loaded successfully');
+      }
+    } catch (error) {
+      console.error('[Ktx2LoaderScript] Error:', error);
+      this.app.fire('ktx2:error', error);
+    }
+  }
   update(dt: number) {
     // Можно добавить runtime logic здесь
   }
