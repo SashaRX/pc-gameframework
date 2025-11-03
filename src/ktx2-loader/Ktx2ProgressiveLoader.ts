@@ -26,6 +26,11 @@ import { KtxCacheManager } from './KtxCacheManager';
 import { alignValue, readU64asNumber, writeU64 } from './utils/alignment';
 import { parseDFDColorSpace } from './utils/colorspace';
 
+const DEFAULT_LIBKTX_BASE_URL =
+  'https://raw.githubusercontent.com/SashaRX/KTX-Software/main/tests/webgl/';
+const DEFAULT_LIBKTX_MODULE_URL = `${DEFAULT_LIBKTX_BASE_URL}libktx.mjs`;
+const DEFAULT_LIBKTX_WASM_URL = `${DEFAULT_LIBKTX_BASE_URL}libktx.wasm`;
+
 export class Ktx2ProgressiveLoader {
   private app: pc.Application;
   private config: Required<Ktx2LoaderConfig>;
@@ -137,6 +142,16 @@ void getAlbedo() {
       console.log('[KTX2] Initializing loader...');
     }
 
+    const resolvedModuleUrl = libktxModuleUrl ?? DEFAULT_LIBKTX_MODULE_URL;
+    const resolvedWasmUrl = libktxWasmUrl ?? DEFAULT_LIBKTX_WASM_URL;
+
+    if (this.config.verbose && (!libktxModuleUrl || !libktxWasmUrl)) {
+      console.log(
+        '[KTX2] libktx URLs не заданы, используем дефолтные из:',
+        DEFAULT_LIBKTX_BASE_URL
+      );
+    }
+
     // Register custom shader chunk for progressive LOD clamping
     this.createShaderChunk();
 
@@ -155,7 +170,7 @@ void getAlbedo() {
 
     // Initialize worker
     if (this.config.useWorker) {
-      const success = await this.initWorker(libktxModuleUrl, libktxWasmUrl);
+      const success = await this.initWorker(resolvedModuleUrl, resolvedWasmUrl);
       if (!success && this.config.verbose) {
         console.warn('[KTX2] Worker initialization failed, will use main thread');
       }
@@ -163,7 +178,7 @@ void getAlbedo() {
 
     // Fallback: initialize main thread module
     if (!this.config.useWorker || !this.workerReady) {
-      await this.initMainThreadModule(libktxModuleUrl, libktxWasmUrl);
+      await this.initMainThreadModule(resolvedModuleUrl, resolvedWasmUrl);
     }
 
     if (this.config.verbose) {
