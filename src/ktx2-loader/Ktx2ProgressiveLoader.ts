@@ -26,10 +26,10 @@ import { KtxCacheManager } from './KtxCacheManager';
 import { alignValue, readU64asNumber, writeU64 } from './utils/alignment';
 import { parseDFDColorSpace } from './utils/colorspace';
 
-const DEFAULT_LIBKTX_BASE_URL =
+export const DEFAULT_LIBKTX_BASE_URL =
   'https://raw.githubusercontent.com/SashaRX/KTX-Software/main/tests/webgl/';
-const DEFAULT_LIBKTX_MODULE_URL = `${DEFAULT_LIBKTX_BASE_URL}libktx.mjs`;
-const DEFAULT_LIBKTX_WASM_URL = `${DEFAULT_LIBKTX_BASE_URL}libktx.wasm`;
+export const DEFAULT_LIBKTX_MODULE_URL = `${DEFAULT_LIBKTX_BASE_URL}libktx.mjs`;
+export const DEFAULT_LIBKTX_WASM_URL = `${DEFAULT_LIBKTX_BASE_URL}libktx.wasm`;
 
 export class Ktx2ProgressiveLoader {
   private app: pc.Application;

@@ -48,19 +48,39 @@ export class Ktx2LoaderScript extends Script {
       // Dynamic import of the loader module
       // Use ../ to go up from scripts/ folder
       const loaderModule = await import('../ktx2-loader/Ktx2ProgressiveLoader.mjs');
-      const Ktx2ProgressiveLoader = loaderModule.Ktx2ProgressiveLoader;
+      const {
+        Ktx2ProgressiveLoader,
+        DEFAULT_LIBKTX_MODULE_URL,
+        DEFAULT_LIBKTX_WASM_URL,
+      } = loaderModule;
 
-      // Create loader instance
-      this.loader = new Ktx2ProgressiveLoader(this.app, {
-        ktxUrl: this.ktxUrl,
-        progressive: this.progressive,
-        isSrgb: this.isSrgb,
-        verbose: this.verbose,
-        enableCache: this.enableCache,
-        useWorker: this.useWorker,
-        adaptiveLoading: this.adaptiveLoading,
-        stepDelayMs: this.stepDelayMs,
-      });
+      const createLoader = () =>
+        new Ktx2ProgressiveLoader(this.app, {
+          ktxUrl: this.ktxUrl,
+          progressive: this.progressive,
+          isSrgb: this.isSrgb,
+          verbose: this.verbose,
+          enableCache: this.enableCache,
+          useWorker: this.useWorker,
+          adaptiveLoading: this.adaptiveLoading,
+          stepDelayMs: this.stepDelayMs,
+        });
+
+      const initializeLoader = async (moduleUrl, wasmUrl) => {
+        if (this.loader) {
+          this.loader.dispose();
+        }
+
+        const loaderInstance = createLoader();
+        this.loader = loaderInstance;
+
+        try {
+          await loaderInstance.initialize(moduleUrl, wasmUrl);
+        } catch (error) {
+          this.loader = null;
+          throw error;
+        }
+      };
 
       // Find libktx assets
       if (this.verbose) {
@@ -76,27 +96,56 @@ export class Ktx2LoaderScript extends Script {
         libktxWasmAsset = this.app.assets.find('libktx.wasm', 'binary');
       }
 
-      if (!libktxJsAsset || !libktxWasmAsset) {
-        console.error('[KTX2] libktx.mjs found:', !!libktxJsAsset);
-        console.error('[KTX2] libktx.wasm found:', !!libktxWasmAsset);
-        console.error('[KTX2] Available asset types:', [...new Set(this.app.assets.list().map(a => a.type))]);
-        throw new Error(
-          'libktx assets not found! Please upload libktx.mjs and libktx.wasm to PlayCanvas Assets.'
-        );
+      const hasPlaycanvasAssets = !!libktxJsAsset && !!libktxWasmAsset;
+      let initialized = false;
+      let primaryError = null;
+
+      if (hasPlaycanvasAssets) {
+        const libktxJsUrl = libktxJsAsset.getFileUrl() || undefined;
+        const libktxWasmUrl = libktxWasmAsset.getFileUrl() || undefined;
+
+        if (this.verbose) {
+          console.log('[KTX2] Asset URLs:');
+          console.log('  - libktx.mjs:', libktxJsUrl);
+          console.log('  - libktx.wasm:', libktxWasmUrl);
+          console.log('[KTX2] Initializing loader using PlayCanvas assets...');
+        }
+
+        try {
+          await initializeLoader(libktxJsUrl, libktxWasmUrl);
+          initialized = true;
+        } catch (error) {
+          primaryError = error;
+
+          if (this.verbose) {
+            console.warn(
+              '[KTX2] Не удалось загрузить libktx из ассетов PlayCanvas, переключаемся на резервный источник...',
+              error
+            );
+          }
+        }
+      } else if (this.verbose) {
+        console.warn('[KTX2] libktx ассеты не найдены, используем резервные URL.');
       }
 
-      const libktxJsUrl = libktxJsAsset.getFileUrl();
-      const libktxWasmUrl = libktxWasmAsset.getFileUrl();
+      if (!initialized) {
+        if (this.verbose) {
+          console.log('[KTX2] Используем резервные URL libktx:');
+          console.log('  - libktx.mjs:', DEFAULT_LIBKTX_MODULE_URL);
+          console.log('  - libktx.wasm:', DEFAULT_LIBKTX_WASM_URL);
+        }
 
-      if (this.verbose) {
-        console.log('[KTX2] Asset URLs:');
-        console.log('  - libktx.mjs:', libktxJsUrl);
-        console.log('  - libktx.wasm:', libktxWasmUrl);
-        console.log('[KTX2] Initializing loader...');
+        try {
+          await initializeLoader(DEFAULT_LIBKTX_MODULE_URL, DEFAULT_LIBKTX_WASM_URL);
+          initialized = true;
+        } catch (fallbackError) {
+          if (primaryError && this.verbose) {
+            console.error('[KTX2] Ошибка первичной инициализации libktx:', primaryError);
+          }
+
+          throw fallbackError;
+        }
       }
-
-      // Initialize loader
-      await this.loader.initialize(libktxJsUrl, libktxWasmUrl);
 
       if (this.verbose) {
         console.log('[KTX2] Loader initialized successfully');
