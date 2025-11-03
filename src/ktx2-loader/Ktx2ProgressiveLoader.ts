@@ -698,21 +698,23 @@ void getAlbedo() {
    * Works in PlayCanvas 2.x ESM environment
    */
   private async loadLibktxScript(url: string): Promise<any> {
-    if (this.config.verbose) {
-      console.log('[KTX2] Importing libktx module via dynamic import...');
-    }
+    const importModule = async (importUrl: string, label: string) => {
+      if (this.config.verbose) {
+        console.log(`[KTX2] Importing libktx module via dynamic import (${label})...`);
+      }
 
-    try {
-      // Use dynamic import to load the ESM module
-      // This properly handles import.meta and other ESM features
-      const module = await import(/* webpackIgnore: true */ url);
+      const module = await import(/* webpackIgnore: true */ importUrl);
 
       if (this.config.verbose) {
-        console.log('[KTX2] Module imported successfully');
+        console.log(`[KTX2] Module imported successfully (${label})`);
         console.log('[KTX2] Module exports:', Object.keys(module));
       }
 
-      // Get the default export (the factory function)
+      return module;
+    };
+
+    try {
+      const module = await importModule(url, 'direct');
       const createModule = module.default || module;
 
       if (!createModule) {
@@ -726,9 +728,53 @@ void getAlbedo() {
       return createModule;
     } catch (error) {
       if (this.config.verbose) {
-        console.error('[KTX2] Error importing libktx module:', error);
+        console.warn('[KTX2] Direct dynamic import failed, falling back to blob import...', error);
       }
-      throw error;
+
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          // Избегаем кэширования, чтобы получать актуальный код
+          cache: 'no-store',
+        });
+      } catch (fetchError) {
+        if (this.config.verbose) {
+          console.error('[KTX2] Не удалось скачать libktx.mjs:', fetchError);
+        }
+        throw fetchError;
+      }
+
+      if (!response.ok) {
+        const statusText = `${response.status} ${response.statusText}`.trim();
+        const errorMessage = `Failed to fetch libktx module: ${statusText}`;
+
+        if (this.config.verbose) {
+          console.error('[KTX2] ' + errorMessage);
+        }
+
+        throw new Error(errorMessage);
+      }
+
+      const moduleSource = await response.text();
+      const blob = new Blob([moduleSource], { type: 'application/javascript' });
+      const objectUrl = URL.createObjectURL(blob);
+
+      try {
+        const module = await importModule(objectUrl, 'blob');
+        const createModule = module.default || module;
+
+        if (!createModule) {
+          throw new Error('No default export found in blob-imported libktx module');
+        }
+
+        if (this.config.verbose) {
+          console.log('[KTX2] Blob import succeeded');
+        }
+
+        return createModule;
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
     }
   }
 
