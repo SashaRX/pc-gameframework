@@ -42,8 +42,16 @@ export class Ktx2LoaderScript extends Script {
 
   /**
    * @attribute
+   * @deprecated Use logLevel instead
    */
   verbose = true;
+
+  /**
+   * @attribute
+   * @range [0, 3]
+   * @description Log verbosity: 0=silent, 1=errors, 2=important, 3=detailed
+   */
+  logLevel = 2;
 
   /**
    * @attribute
@@ -93,24 +101,7 @@ export class Ktx2LoaderScript extends Script {
   private texture: any = null;
 
   async initialize() {
-    if (this.verbose) {
-      console.log('[KTX2] Script initializing...');
-      console.log('[KTX2] Script attributes:');
-      console.log('  - ktxUrl:', this.ktxUrl);
-      console.log('  - libktxMjsUrl:', this.libktxMjsUrl);
-      console.log('  - libktxWasmUrl:', this.libktxWasmUrl);
-      console.log('  - progressive:', this.progressive);
-      console.log('  - isSrgb:', this.isSrgb);
-      console.log('  - verbose:', this.verbose);
-      console.log('  - enableCache:', this.enableCache);
-      console.log('  - useWorker:', this.useWorker);
-      console.log('  - adaptiveLoading:', this.adaptiveLoading);
-      console.log('  - stepDelayMs:', this.stepDelayMs);
-      console.log('  - adaptiveThrottling:', this.adaptiveThrottling);
-      console.log('  - targetFps:', this.targetFps);
-      console.log('  - minStepDelayMs:', this.minStepDelayMs);
-      console.log('  - maxStepDelayMs:', this.maxStepDelayMs);
-    }
+    console.log('[KTX2] Script initializing...');
 
     try {
       // Создаём loader с внешними URL для libktx файлов
@@ -121,6 +112,7 @@ export class Ktx2LoaderScript extends Script {
         progressive: this.progressive,
         isSrgb: this.isSrgb,
         verbose: this.verbose,
+        logLevel: this.logLevel,
         enableCache: this.enableCache,
         useWorker: this.useWorker,
         adaptiveLoading: this.adaptiveLoading,
@@ -134,18 +126,10 @@ export class Ktx2LoaderScript extends Script {
       // Initialize loader
       await this.loader.initialize();
 
-      if (this.verbose) {
-        console.log('[KTX2] Loader initialized successfully');
-      }
-
       // Загрузка текстуры
       this.texture = await this.loader.loadToEntity(this.entity, {
         onProgress: (level: number, total: number, info: any) => {
-          if (this.verbose) {
-            console.log(`[Ktx2LoaderScript] Progress: ${level}/${total}`, info);
-          }
-
-          // Можно отправить event для UI
+          // Fire event for UI
           this.app.fire('ktx2:progress', {
             level,
             total,
@@ -155,20 +139,17 @@ export class Ktx2LoaderScript extends Script {
         },
 
         onComplete: (stats: any) => {
-          if (this.verbose) {
-            console.log('[Ktx2LoaderScript] Complete!', stats);
-          }
-
+          console.log('[KTX2] Loading complete:', {
+            time: `${(stats.totalTime! / 1000).toFixed(2)}s`,
+            levels: stats.levelsLoaded,
+            cached: stats.levelsCached,
+          });
           this.app.fire('ktx2:complete', stats);
         },
       });
 
-      if (this.verbose) {
-        console.log('[Ktx2LoaderScript] Texture loaded successfully');
-      }
-
     } catch (error) {
-      console.error('[Ktx2LoaderScript] Error:', error);
+      console.error('[KTX2] Error:', error);
       this.app.fire('ktx2:error', error);
     }
   }
@@ -187,10 +168,6 @@ export class Ktx2LoaderScript extends Script {
     if (this.texture) {
       this.texture.destroy();
       this.texture = null;
-    }
-
-    if (this.verbose) {
-      console.log('[Ktx2LoaderScript] Destroyed');
     }
   }
 }

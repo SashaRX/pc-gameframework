@@ -27,8 +27,11 @@ export interface Ktx2LoaderConfig {
   /** Delay between loading steps (ms) */
   stepDelayMs?: number;
   
-  /** Enable verbose logging */
+  /** Enable verbose logging (deprecated - use logLevel instead) */
   verbose?: boolean;
+
+  /** Log verbosity level: 0=silent, 1=errors, 2=important, 3=detailed */
+  logLevel?: number;
   
   /** Maximum RGBA bytes allowed in memory */
   maxRgbaBytes?: number;
@@ -41,7 +44,10 @@ export interface Ktx2LoaderConfig {
   
   /** Adaptive margin multiplier */
   adaptiveMargin?: number;
-  
+
+  /** Adaptive update interval in seconds (check if more detail needed) */
+  adaptiveUpdateInterval?: number;
+
   /** Use Web Worker for transcoding */
   useWorker?: boolean;
   
@@ -65,6 +71,18 @@ export interface Ktx2LoaderConfig {
 
   /** Minimum stepDelayMs when FPS is high */
   minStepDelayMs?: number;
+
+  /** Enable memory pool for buffer reuse */
+  enableMemoryPool?: boolean;
+
+  /** Maximum memory pool size in bytes */
+  memoryPoolMaxSize?: number;
+
+  /** Assemble full KTX2 file after loading all mips */
+  assembleFullKtx?: boolean;
+
+  /** Cache full KTX2 file (requires assembleFullKtx) */
+  cacheFullKtx?: boolean;
 }
 
 // ============================================================================

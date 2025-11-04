@@ -293,6 +293,72 @@ export class KtxCacheManager {
   }
 
   /**
+   * Save full KTX2 file to cache
+   */
+  async saveFullKtx(url: string, data: Uint8Array, metadata: { width: number; height: number; timestamp: number }): Promise<void> {
+    if (!this.db) return;
+
+    const id = `${url}#FULL`;
+    const item: CachedMip = {
+      id,
+      url,
+      level: -1, // Special marker for full KTX2
+      width: metadata.width,
+      height: metadata.height,
+      data,
+      timestamp: metadata.timestamp,
+      version: '1.0',
+    };
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction([this.STORE_NAME], 'readwrite');
+      const store = transaction.objectStore(this.STORE_NAME);
+      const request = store.put(item);
+
+      request.onsuccess = async () => {
+        await this.enforceSizeLimit();
+        resolve();
+      };
+
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  /**
+   * Load full KTX2 file from cache
+   */
+  async loadFullKtx(url: string): Promise<Uint8Array | null> {
+    if (!this.db) {
+      this.stats.misses++;
+      return null;
+    }
+
+    const id = `${url}#FULL`;
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction([this.STORE_NAME], 'readonly');
+      const store = transaction.objectStore(this.STORE_NAME);
+      const request = store.get(id);
+
+      request.onsuccess = () => {
+        const result: CachedMip | undefined = request.result;
+        if (result) {
+          this.stats.hits++;
+          resolve(result.data);
+        } else {
+          this.stats.misses++;
+          resolve(null);
+        }
+      };
+
+      request.onerror = () => {
+        this.stats.misses++;
+        reject(request.error);
+      };
+    });
+  }
+
+  /**
    * Close database connection
    */
   close(): void {

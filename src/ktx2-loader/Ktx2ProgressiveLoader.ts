@@ -23,6 +23,7 @@ import type {
   KtxApi,
 } from './types';
 import { KtxCacheManager } from './KtxCacheManager';
+import { MemoryPool } from './MemoryPool';
 import { alignValue, readU64asNumber, writeU64 } from './utils/alignment';
 import { parseDFDColorSpace } from './utils/colorspace';
 import { LibktxLoader } from './LibktxLoader';
@@ -31,6 +32,11 @@ export class Ktx2ProgressiveLoader {
   private app: pc.Application;
   private config: Required<Omit<Ktx2LoaderConfig, 'libktxModuleUrl' | 'libktxWasmUrl'>> &
     Pick<Ktx2LoaderConfig, 'libktxModuleUrl' | 'libktxWasmUrl'>;
+
+  // Log levels: 0=silent, 1=errors, 2=important, 3=detailed
+  private readonly LOG_ERROR = 1;
+  private readonly LOG_INFO = 2;
+  private readonly LOG_VERBOSE = 3;
   
   // Worker state
   private worker: Worker | null = null;
@@ -49,6 +55,9 @@ export class Ktx2ProgressiveLoader {
 
   // Cache manager
   private cacheManager: KtxCacheManager | null = null;
+
+  // Memory pool
+  private memoryPool: MemoryPool | null = null;
 
   // Custom material for LOD control
   private customMaterial: pc.StandardMaterial | null = null;
@@ -79,6 +88,7 @@ export class Ktx2ProgressiveLoader {
       enableAniso: config.enableAniso ?? true,
       adaptiveLoading: config.adaptiveLoading ?? false,
       adaptiveMargin: config.adaptiveMargin ?? 1.5,
+      adaptiveUpdateInterval: config.adaptiveUpdateInterval ?? 0.5,
       useWorker: config.useWorker ?? true,
       minFrameInterval: config.minFrameInterval ?? 16, // 60fps
       enableCache: config.enableCache ?? true,
@@ -87,10 +97,42 @@ export class Ktx2ProgressiveLoader {
       targetFps: config.targetFps ?? 60,
       maxStepDelayMs: config.maxStepDelayMs ?? 500,
       minStepDelayMs: config.minStepDelayMs ?? 0,
+      logLevel: config.logLevel ?? (config.verbose ? 3 : 2),
+      enableMemoryPool: config.enableMemoryPool ?? true,
+      memoryPoolMaxSize: config.memoryPoolMaxSize ?? 128 * 1024 * 1024, // 128 MB
+      assembleFullKtx: config.assembleFullKtx ?? false,
+      cacheFullKtx: config.cacheFullKtx ?? false,
     };
 
     // Initialize current step delay
     this.currentStepDelay = this.config.stepDelayMs;
+
+    // Initialize memory pool
+    if (this.config.enableMemoryPool) {
+      this.memoryPool = new MemoryPool(this.config.memoryPoolMaxSize);
+    }
+  }
+
+  // ============================================================================
+  // Logging Helpers
+  // ============================================================================
+
+  private log(level: number, ...args: any[]): void {
+    if (this.config.logLevel >= level) {
+      console.log(...args);
+    }
+  }
+
+  private logError(...args: any[]): void {
+    if (this.config.logLevel >= this.LOG_ERROR) {
+      console.error(...args);
+    }
+  }
+
+  private logWarn(...args: any[]): void {
+    if (this.config.logLevel >= this.LOG_INFO) {
+      console.warn(...args);
+    }
   }
 
   // ============================================================================
@@ -145,18 +187,14 @@ void getAlbedo() {
 }
 `);
 
-    if (this.config.verbose) {
-      console.log('[KTX2] Custom shader chunk registered');
-    }
+    this.log(this.LOG_INFO, '[KTX2] Custom shader chunk registered');
   }
 
   /**
    * Initialize the loader (load libktx, setup worker, init cache)
    */
   async initialize(libktxModuleUrl?: string, libktxWasmUrl?: string): Promise<void> {
-    if (this.config.verbose) {
-      console.log('[KTX2] Initializing loader...');
-    }
+    this.log(this.LOG_INFO, '[KTX2] Initializing loader...');
 
     // Use URLs from config if not provided as parameters
     const mjsUrl = libktxModuleUrl || this.config.libktxModuleUrl;
@@ -173,16 +211,14 @@ void getAlbedo() {
       // Clean old entries
       await this.cacheManager.clearOld(this.config.cacheMaxAgeDays);
 
-      if (this.config.verbose) {
-        console.log('[KTX2] Cache initialized');
-      }
+      this.log(this.LOG_INFO, '[KTX2] Cache initialized');
     }
 
     // Initialize worker
     if (this.config.useWorker) {
       const success = await this.initWorker(mjsUrl, wasmUrl);
-      if (!success && this.config.verbose) {
-        console.warn('[KTX2] Worker initialization failed, will use main thread');
+      if (!success) {
+        this.logWarn('[KTX2] Worker initialization failed, will use main thread');
       }
     }
 
@@ -191,9 +227,7 @@ void getAlbedo() {
       await this.initMainThreadModule(mjsUrl, wasmUrl);
     }
 
-    if (this.config.verbose) {
-      console.log('[KTX2] Loader ready');
-    }
+    this.log(this.LOG_INFO, '[KTX2] Loader ready');
   }
 
   /**
@@ -201,9 +235,7 @@ void getAlbedo() {
    */
   pause(): void {
     this.isPaused = true;
-    if (this.config.verbose) {
-      console.log('[KTX2] Loading paused');
-    }
+    this.log(this.LOG_INFO, '[KTX2] Loading paused');
   }
 
   /**
@@ -216,9 +248,7 @@ void getAlbedo() {
         this.pauseResolve();
         this.pauseResolve = null;
       }
-      if (this.config.verbose) {
-        console.log('[KTX2] Loading resumed');
-      }
+      this.log(this.LOG_INFO, '[KTX2] Loading resumed');
     }
   }
 
@@ -263,9 +293,7 @@ void getAlbedo() {
       throw new Error('Cache not enabled');
     }
     await this.cacheManager.clear();
-    if (this.config.verbose) {
-      console.log('[KTX2] Cache cleared');
-    }
+    this.log(this.LOG_INFO, '[KTX2] Cache cleared');
   }
 
   /**
@@ -276,9 +304,17 @@ void getAlbedo() {
       throw new Error('Cache not enabled');
     }
     this.cacheManager.setMaxSize(megabytes);
-    if (this.config.verbose) {
-      console.log(`[KTX2] Cache max size set to ${megabytes}MB`);
+    this.log(this.LOG_INFO, `[KTX2] Cache max size set to ${megabytes}MB`);
+  }
+
+  /**
+   * Get memory pool statistics
+   */
+  getMemoryPoolStats() {
+    if (!this.memoryPool) {
+      throw new Error('Memory pool not enabled');
     }
+    return this.memoryPool.getStats();
   }
 
   /**
@@ -297,9 +333,10 @@ void getAlbedo() {
     if (this.cacheManager) {
       this.cacheManager.close();
     }
-    if (this.config.verbose) {
-      console.log('[KTX2] Loader destroyed');
+    if (this.memoryPool) {
+      this.memoryPool.clear();
     }
+    this.log(this.LOG_INFO, '[KTX2] Loader destroyed');
   }
 
   /**
@@ -329,22 +366,20 @@ void getAlbedo() {
 
     // 1. Probe the file
     const probe = await this.probe(this.config.ktxUrl);
-    
-    if (this.config.verbose) {
-      console.log('[KTX2] Probe complete:', {
-        levels: probe.levelCount,
-        size: `${probe.width}x${probe.height}`,
-        totalSize: `${(probe.totalSize / 1024 / 1024).toFixed(2)} MB`,
-      });
-    }
+
+    this.log(this.LOG_INFO, '[KTX2] Probe complete:', {
+      levels: probe.levelCount,
+      size: `${probe.width}x${probe.height}`,
+      totalSize: `${(probe.totalSize / 1024 / 1024).toFixed(2)} MB`,
+    });
 
     // 2. Determine which levels to load
     const startLevel = this.config.adaptiveLoading
       ? this.calculateStartLevel(entity, probe.width, probe.height, probe.levelCount)
       : probe.levelCount - 1;
 
-    if (this.config.verbose && this.config.adaptiveLoading) {
-      console.log(`[KTX2] Adaptive loading: starting from level ${startLevel}`);
+    if (this.config.adaptiveLoading) {
+      this.log(this.LOG_VERBOSE, `[KTX2] Adaptive loading: starting from level ${startLevel}`);
     }
 
     // 3. Check cache for available levels
@@ -352,8 +387,8 @@ void getAlbedo() {
       ? await this.cacheManager.getMipList(this.config.ktxUrl)
       : [];
 
-    if (this.config.verbose && cachedLevels.length > 0) {
-      console.log(`[KTX2] Found ${cachedLevels.length} cached levels:`, cachedLevels);
+    if (cachedLevels.length > 0) {
+      this.log(this.LOG_VERBOSE, `[KTX2] Found ${cachedLevels.length} cached levels:`, cachedLevels);
     }
 
     // 4. Create texture
@@ -386,24 +421,22 @@ void getAlbedo() {
           };
           fromCache = true;
           loadStats.levelsCached++;
-          
-          if (this.config.verbose) {
-            console.log(`[KTX2] Level ${i} loaded from cache`);
-          }
+
+          this.log(this.LOG_VERBOSE, `[KTX2] Level ${i} loaded from cache`);
         }
       }
 
       // Load from network if not cached
       if (!fromCache) {
         const transcodeStart = performance.now();
-        
+
         // Fetch level payload
         const payload = await this.fetchRange(
           this.config.ktxUrl,
           levelInfo.byteOffset,
           levelInfo.byteOffset + levelInfo.byteLength - 1
         );
-        
+
         loadStats.bytesDownloaded += payload.byteLength;
 
         // Repack to mini-KTX2
@@ -411,7 +444,7 @@ void getAlbedo() {
 
         // Transcode
         result = await this.transcode(miniKtx);
-        
+
         const transcodeTime = performance.now() - transcodeStart;
         loadStats.bytesTranscoded += result.data.byteLength;
 
@@ -424,17 +457,15 @@ void getAlbedo() {
           });
         }
 
-        if (this.config.verbose) {
-          console.log(
-            `[KTX2] Level ${i}: ${result.width}x${result.height} ` +
-            `(${(transcodeTime).toFixed(1)}ms)`
-          );
-        }
+        this.log(this.LOG_VERBOSE,
+          `[KTX2] Level ${i}: ${result.width}x${result.height} ` +
+          `(${(transcodeTime).toFixed(1)}ms)`
+        );
       }
 
       // Check result exists
       if (!result) {
-        console.error(`[KTX2] Failed to load level ${i}`);
+        this.logError(`[KTX2] Failed to load level ${i}`);
         continue;
       }
 
@@ -450,9 +481,7 @@ void getAlbedo() {
       // This makes the texture visible immediately with lowest quality
       if (i === startLevel) {
         this.applyTextureToEntity(entity, texture, probe.levelCount);
-        if (this.config.verbose) {
-          console.log('[KTX2] Texture applied to entity with initial quality');
-        }
+        this.log(this.LOG_INFO, '[KTX2] Texture applied to entity with initial quality');
       }
 
       // Update heap stats
@@ -514,17 +543,15 @@ void getAlbedo() {
               this.currentStepDelay + 10,
               this.config.maxStepDelayMs
             );
-            if (this.config.verbose) {
-              console.log(`[KTX2] FPS low (${avgFps.toFixed(1)}), increasing delay to ${this.currentStepDelay}ms`);
-            }
+            this.log(this.LOG_VERBOSE, `[KTX2] FPS low (${avgFps.toFixed(1)}), increasing delay to ${this.currentStepDelay}ms`);
           } else if (avgFps > targetFps * 1.1) {
             // FPS high - decrease delay to speed up loading
             this.currentStepDelay = Math.max(
               this.currentStepDelay - 10,
               this.config.minStepDelayMs
             );
-            if (this.config.verbose && this.currentStepDelay > this.config.minStepDelayMs) {
-              console.log(`[KTX2] FPS high (${avgFps.toFixed(1)}), decreasing delay to ${this.currentStepDelay}ms`);
+            if (this.currentStepDelay > this.config.minStepDelayMs) {
+              this.log(this.LOG_VERBOSE, `[KTX2] FPS high (${avgFps.toFixed(1)}), decreasing delay to ${this.currentStepDelay}ms`);
             }
           }
         } else {
@@ -567,36 +594,22 @@ void getAlbedo() {
       callbacks.onComplete(loadStats);
     }
 
-    if (this.config.verbose) {
-      console.log('[KTX2] Loading complete:', {
-        totalTime: `${(loadStats.totalTime! / 1000).toFixed(2)}s`,
-        levelsLoaded: loadStats.levelsLoaded,
-        levelsCached: loadStats.levelsCached,
-        downloaded: `${(loadStats.bytesDownloaded / 1024 / 1024).toFixed(2)} MB`,
-        transcoded: `${(loadStats.bytesTranscoded / 1024 / 1024).toFixed(2)} MB`,
-      });
-    }
+    this.log(this.LOG_INFO, '[KTX2] Loading complete:', {
+      totalTime: `${(loadStats.totalTime! / 1000).toFixed(2)}s`,
+      levelsLoaded: loadStats.levelsLoaded,
+      levelsCached: loadStats.levelsCached,
+      downloaded: `${(loadStats.bytesDownloaded / 1024 / 1024).toFixed(2)} MB`,
+      transcoded: `${(loadStats.bytesTranscoded / 1024 / 1024).toFixed(2)} MB`,
+    });
 
     return texture;
   }
 
   /**
-   * Cleanup resources
+   * Cleanup resources (deprecated - use destroy() instead)
    */
   dispose(): void {
-    if (this.worker) {
-      this.worker.terminate();
-      this.worker = null;
-    }
-    
-    if (this.customMaterial) {
-      this.customMaterial.destroy();
-      this.customMaterial = null;
-    }
-
-    if (this.config.verbose) {
-      console.log('[KTX2] Loader disposed');
-    }
+    this.destroy();
   }
 
   // ============================================================================
@@ -810,9 +823,7 @@ self.onmessage = async function(e) {
   }
 
   private async initWorker(libktxModuleUrl?: string, libktxWasmUrl?: string): Promise<boolean> {
-    if (this.config.verbose) {
-      console.log('[KTX2] Initializing Web Worker...');
-    }
+    this.log(this.LOG_INFO, '[KTX2] Initializing Web Worker...');
 
     try {
       // Get URLs (external or Asset Registry)
@@ -826,9 +837,7 @@ self.onmessage = async function(e) {
         const wasmAsset = this.app.assets.find('libktx.wasm', 'wasm') || this.app.assets.find('libktx.wasm', 'binary');
 
         if (!mjsAsset || !wasmAsset) {
-          if (this.config.verbose) {
-            console.warn('[KTX2] Worker: libktx assets not found');
-          }
+          this.logWarn('[KTX2] Worker: libktx assets not found');
           return false;
         }
 
@@ -836,9 +845,7 @@ self.onmessage = async function(e) {
         const wasmUrlNullable = wasmAsset.getFileUrl();
 
         if (!mjsUrlNullable || !wasmUrlNullable) {
-          if (this.config.verbose) {
-            console.warn('[KTX2] Worker: Asset URLs not available');
-          }
+          this.logWarn('[KTX2] Worker: Asset URLs not available');
           return false;
         }
 
@@ -863,14 +870,10 @@ self.onmessage = async function(e) {
             this.workerPendingCallbacks.delete(response.messageId);
 
             if (response.success) {
-              if (this.config.verbose) {
-                console.log(`[KTX2] Worker response #${response.messageId}: ${response.width}x${response.height}`);
-              }
+              this.log(this.LOG_VERBOSE, `[KTX2] Worker response #${response.messageId}: ${response.width}x${response.height}`);
               callbacks.resolve(response);
             } else {
-              if (this.config.verbose) {
-                console.error(`[KTX2] Worker error #${response.messageId}:`, response.error);
-              }
+              this.logError(`[KTX2] Worker error #${response.messageId}:`, response.error);
               callbacks.reject(new Error(response.error || 'Worker error'));
             }
           }
@@ -878,9 +881,7 @@ self.onmessage = async function(e) {
       };
 
       this.worker.onerror = (error: ErrorEvent) => {
-        if (this.config.verbose) {
-          console.error('[KTX2] Worker error:', error);
-        }
+        this.logError('[KTX2] Worker error:', error);
       };
 
       // Load libktx code
@@ -923,18 +924,14 @@ self.onmessage = async function(e) {
 
       await initPromise;
 
-      if (this.config.verbose) {
-        console.log('[KTX2] Worker initialized successfully');
-      }
+      this.log(this.LOG_INFO, '[KTX2] Worker initialized successfully');
 
       return true;
 
     } catch (error) {
-      if (this.config.verbose) {
-        console.warn('[KTX2] Worker initialization failed:', error);
-        if (error instanceof Error) {
-          console.warn('[KTX2] Worker error details:', error.message, error.stack);
-        }
+      this.logWarn('[KTX2] Worker initialization failed:', error);
+      if (error instanceof Error) {
+        this.log(this.LOG_VERBOSE, '[KTX2] Worker error details:', error.message, error.stack);
       }
 
       // Cleanup on failure
@@ -951,16 +948,12 @@ self.onmessage = async function(e) {
    * Initialize libktx module on main thread (fallback when worker is disabled)
    */
   private async initMainThreadModule(libktxModuleUrl?: string, libktxWasmUrl?: string): Promise<void> {
-    if (this.config.verbose) {
-      console.log('[KTX2] Loading libktx module on main thread...');
-    }
+    this.log(this.LOG_INFO, '[KTX2] Loading libktx module on main thread...');
 
     try {
       // Check if module is already loaded in globalThis
       if ((globalThis as any).__libktx_factory) {
-        if (this.config.verbose) {
-          console.log('[KTX2] Using pre-loaded libktx from globalThis');
-        }
+        this.log(this.LOG_VERBOSE, '[KTX2] Using pre-loaded libktx from globalThis');
         const factory = (globalThis as any).__libktx_factory;
 
         // Load WASM binary
@@ -990,13 +983,11 @@ self.onmessage = async function(e) {
 
       } else {
         // Fallback: use LibktxLoader
-        if (this.config.verbose) {
-          console.log('[KTX2] Loading libktx via LibktxLoader (fallback)...');
-        }
+        this.log(this.LOG_INFO, '[KTX2] Loading libktx via LibktxLoader (fallback)...');
         const loader = LibktxLoader.getInstance();
         this.ktxModule = await loader.initialize(
           this.app,
-          this.config.verbose,
+          this.config.logLevel >= this.LOG_VERBOSE,
           libktxModuleUrl,
           libktxWasmUrl
         );
@@ -1006,24 +997,18 @@ self.onmessage = async function(e) {
         throw new Error('Failed to load KTX module');
       }
 
-      if (this.config.verbose) {
-        console.log('[KTX2] Module loaded successfully');
-        console.log('[KTX2] Module has ktxTexture:', typeof this.ktxModule.ktxTexture);
-        console.log('[KTX2] Module has ErrorCode:', typeof this.ktxModule.ErrorCode);
-        console.log('[KTX2] Module has TranscodeTarget:', typeof this.ktxModule.TranscodeTarget);
-        console.log('[KTX2] Module has HEAPU8:', typeof this.ktxModule.HEAPU8);
-      }
+      this.log(this.LOG_VERBOSE, '[KTX2] Module loaded successfully');
+      this.log(this.LOG_VERBOSE, '[KTX2] Module has ktxTexture:', typeof this.ktxModule.ktxTexture);
+      this.log(this.LOG_VERBOSE, '[KTX2] Module has ErrorCode:', typeof this.ktxModule.ErrorCode);
+      this.log(this.LOG_VERBOSE, '[KTX2] Module has TranscodeTarget:', typeof this.ktxModule.TranscodeTarget);
+      this.log(this.LOG_VERBOSE, '[KTX2] Module has HEAPU8:', typeof this.ktxModule.HEAPU8);
 
       // Create cwrap API wrappers
-      if (this.config.verbose) {
-        console.log('[KTX2] Creating cwrap API wrappers...');
-      }
+      this.log(this.LOG_VERBOSE, '[KTX2] Creating cwrap API wrappers...');
 
       this.ktxApi = this.createKtxApi(this.ktxModule);
 
-      if (this.config.verbose) {
-        console.log('[KTX2] libktx module loaded successfully (cwrap C API)');
-      }
+      this.log(this.LOG_INFO, '[KTX2] libktx module loaded successfully (cwrap C API)');
     } catch (error) {
       console.error('[KTX2] Failed to load libktx module:', error);
       throw error;
@@ -1034,9 +1019,7 @@ self.onmessage = async function(e) {
    * Probe KTX2 file: fetch header, parse metadata, determine range support
    */
   private async probe(url: string): Promise<Ktx2ProbeResult> {
-    if (this.config.verbose) {
-      console.log('[KTX2] Probing:', url);
-    }
+    this.log(this.LOG_VERBOSE, '[KTX2] Probing:', url);
 
     // Step 1: HEAD request to get file size and check range support
     let totalSize = 0;
@@ -1059,12 +1042,10 @@ self.onmessage = async function(e) {
       const acceptRanges = headResponse.headers.get('Accept-Ranges');
       supportsRanges = acceptRanges === 'bytes';
 
-      if (this.config.verbose) {
-        console.log('[KTX2] HEAD response:', {
-          fileSize: `${(totalSize / 1024 / 1024).toFixed(2)} MB`,
-          supportsRanges,
-        });
-      }
+      this.log(this.LOG_VERBOSE, '[KTX2] HEAD response:', {
+        fileSize: `${(totalSize / 1024 / 1024).toFixed(2)} MB`,
+        supportsRanges,
+      });
     } catch (error) {
       console.warn('[KTX2] HEAD request failed, will try GET:', error);
     }
@@ -1127,7 +1108,7 @@ self.onmessage = async function(e) {
 
     // Step 5: Fetch DFD (Data Format Descriptor) to get color space
     const dfd = dfdLen > 0 ? await this.fetchRange(url, dfdOff, dfdOff + dfdLen - 1) : new Uint8Array(0);
-    const colorSpace = parseDFDColorSpace(dfd, this.config.verbose);
+    const colorSpace = parseDFDColorSpace(dfd, this.config.logLevel >= this.LOG_VERBOSE);
 
     // Step 6: Fetch KVD and SGD if needed (for now we just allocate empty)
     const kvd = kvdLen > 0 ? await this.fetchRange(url, kvdOff, kvdOff + kvdLen - 1) : new Uint8Array(0);
@@ -1165,15 +1146,13 @@ self.onmessage = async function(e) {
       colorSpace,
     };
 
-    if (this.config.verbose) {
-      console.log('[KTX2] Probe complete:', {
-        size: `${pixelWidth}x${pixelHeight}`,
-        levels: levelCount,
-        fileSize: `${(totalSize / 1024 / 1024).toFixed(2)} MB`,
-        colorSpace: colorSpace.isSrgb ? 'sRGB' : 'Linear',
-        supportsRanges,
-      });
-    }
+    this.log(this.LOG_VERBOSE, '[KTX2] Probe complete:', {
+      size: `${pixelWidth}x${pixelHeight}`,
+      levels: levelCount,
+      fileSize: `${(totalSize / 1024 / 1024).toFixed(2)} MB`,
+      colorSpace: colorSpace.isSrgb ? 'sRGB' : 'Linear',
+      supportsRanges,
+    });
 
     return result;
   }
@@ -1213,9 +1192,7 @@ self.onmessage = async function(e) {
       throw new Error(`Unexpected response status: ${response.status}`);
     } catch (error) {
       // Fallback: fetch entire file and slice
-      if (this.config.verbose) {
-        console.warn(`[KTX2] Range request failed (${start}-${end}), falling back to full fetch:`, error);
-      }
+      this.logWarn(`[KTX2] Range request failed (${start}-${end}), falling back to full fetch:`, error);
 
       const response = await fetch(url);
       if (!response.ok) {
@@ -1313,9 +1290,7 @@ self.onmessage = async function(e) {
     const codebooksSrc = sgdFull.subarray(codebooksOffsetFull, codebooksOffsetFull + codebooksSize);
     newSgd.set(codebooksSrc, headerSize + singleLevelDescs.byteLength);
 
-    if (this.config.verbose) {
-      console.log(`[KTX2] SGD repacked for level ${levelIndex}: ${levelImageCount} images (of ${imageCountFull} total), ${sgdFull.byteLength}→${newSgdSize} bytes`);
-    }
+    this.log(this.LOG_VERBOSE, `[KTX2] SGD repacked for level ${levelIndex}: ${levelImageCount} images (of ${imageCountFull} total), ${sgdFull.byteLength}→${newSgdSize} bytes`);
 
     return newSgd;
   }
@@ -1484,34 +1459,32 @@ self.onmessage = async function(e) {
 
     miniKtx.set(payload, dataOffset);
 
-    if (this.config.verbose) {
-      // Get header info for debugging
-      const headerView = new DataView(miniKtx.buffer, 0, 80);
-      const levelCount = headerView.getUint32(40, true);
-      const vkFormat = headerView.getUint32(12, true);
+    // Get header info for debugging
+    const headerView = new DataView(miniKtx.buffer, 0, 80);
+    const levelCount = headerView.getUint32(40, true);
+    const vkFormat = headerView.getUint32(12, true);
 
-      console.log(`[KTX2] Repacked level ${level}:`, {
-        originalSize: `${(levelInfo.byteLength / 1024).toFixed(2)} KB`,
-        miniKtxSize: `${(totalSize / 1024).toFixed(2)} KB`,
-        dimensions: `${mipWidth}x${mipHeight}`,
-        overhead: `${((totalSize - dataLength) / 1024).toFixed(2)} KB`,
-        dfdSize: `${probe.dfd.length} bytes`,
-        dfdOffset,
-        kvdSize: `${probe.kvd.length} bytes`,
-        kvdOffset,
-        sgdSize: `${sgdData.length} bytes`,
-        sgdOffset,
-        sgdOriginalSize: `${probe.sgd.length} bytes`,
-        payloadSize: dataLength,
-        payloadOffset: dataOffset,
-        isETC1S,
-        supercompressionScheme,
-        uncompressedByteLength,
-        vkFormat,
-        levelCount,
-        headerBytes: Array.from(miniKtx.slice(0, 48)).map(b => b.toString(16).padStart(2, '0')).join(' '),
-      });
-    }
+    this.log(this.LOG_VERBOSE, `[KTX2] Repacked level ${level}:`, {
+      originalSize: `${(levelInfo.byteLength / 1024).toFixed(2)} KB`,
+      miniKtxSize: `${(totalSize / 1024).toFixed(2)} KB`,
+      dimensions: `${mipWidth}x${mipHeight}`,
+      overhead: `${((totalSize - dataLength) / 1024).toFixed(2)} KB`,
+      dfdSize: `${probe.dfd.length} bytes`,
+      dfdOffset,
+      kvdSize: `${probe.kvd.length} bytes`,
+      kvdOffset,
+      sgdSize: `${sgdData.length} bytes`,
+      sgdOffset,
+      sgdOriginalSize: `${probe.sgd.length} bytes`,
+      payloadSize: dataLength,
+      payloadOffset: dataOffset,
+      isETC1S,
+      supercompressionScheme,
+      uncompressedByteLength,
+      vkFormat,
+      levelCount,
+      headerBytes: Array.from(miniKtx.slice(0, 48)).map(b => b.toString(16).padStart(2, '0')).join(' '),
+    });
 
     return miniKtx;
   }
@@ -1521,9 +1494,7 @@ self.onmessage = async function(e) {
    * Based on old working implementation from Ktx2ProgressiveVanilla.js
    */
   private createKtxApi(module: KtxModule): KtxApi {
-    if (this.config.verbose) {
-      console.log('[KTX2] Creating cwrap wrappers for C API...');
-    }
+    this.log(this.LOG_VERBOSE, '[KTX2] Creating cwrap wrappers for C API...');
 
     const api: KtxApi = {
       malloc: module.cwrap('malloc', 'number', ['number']),
@@ -1541,9 +1512,7 @@ self.onmessage = async function(e) {
       errorString: module.cwrap('ktxErrorString', 'string', ['number']),
     };
 
-    if (this.config.verbose) {
-      console.log('[KTX2] cwrap API created:', Object.keys(api));
-    }
+    this.log(this.LOG_VERBOSE, '[KTX2] cwrap API created:', Object.keys(api));
 
     return api;
   }
@@ -1555,16 +1524,12 @@ self.onmessage = async function(e) {
   private async transcode(miniKtx: Uint8Array): Promise<Ktx2TranscodeResult> {
     // Use worker if available and ready
     if (this.config.useWorker && this.workerReady && this.worker) {
-      if (this.config.verbose) {
-        console.log('[KTX2] Transcoding via Worker');
-      }
+      this.log(this.LOG_VERBOSE, '[KTX2] Transcoding via Worker');
       return this.transcodeWorker(miniKtx);
     }
 
     // Fallback to main thread
-    if (this.config.verbose) {
-      console.log('[KTX2] Transcoding on Main Thread (worker not available)');
-    }
+    this.log(this.LOG_VERBOSE, '[KTX2] Transcoding on Main Thread (worker not available)');
 
     if (!this.ktxModule) {
       throw new Error('libktx not initialized. Call initialize() first.');
@@ -1588,9 +1553,7 @@ self.onmessage = async function(e) {
       // Store callbacks
       this.workerPendingCallbacks.set(messageId, { resolve, reject });
 
-      if (this.config.verbose) {
-        console.log(`[KTX2] Worker request #${messageId}: ${miniKtx.byteLength} bytes`);
-      }
+      this.log(this.LOG_VERBOSE, `[KTX2] Worker request #${messageId}: ${miniKtx.byteLength} bytes`);
 
       // Send transcode request
       this.worker!.postMessage(
@@ -1609,9 +1572,7 @@ self.onmessage = async function(e) {
         if (this.workerPendingCallbacks.has(messageId)) {
           this.workerPendingCallbacks.delete(messageId);
           const elapsed = performance.now() - startTime;
-          if (this.config.verbose) {
-            console.warn(`[KTX2] Worker timeout after ${elapsed.toFixed(1)}ms`);
-          }
+          this.logWarn(`[KTX2] Worker timeout after ${elapsed.toFixed(1)}ms`);
           reject(new Error('Worker transcode timeout'));
         }
       }, 30000);
@@ -1666,20 +1627,16 @@ self.onmessage = async function(e) {
         }
 
         try {
-          if (this.config.verbose) {
-            const baseW = api.getWidth(texPtr);
-            const baseH = api.getHeight(texPtr);
-            console.log('[KTX2] Texture created from mini-KTX');
-            console.log('[KTX2] - Base dimensions:', baseW, 'x', baseH);
-          }
+          const baseW = api.getWidth(texPtr);
+          const baseH = api.getHeight(texPtr);
+          this.log(this.LOG_VERBOSE, '[KTX2] Texture created from mini-KTX');
+          this.log(this.LOG_VERBOSE, '[KTX2] - Base dimensions:', baseW, 'x', baseH);
 
           // Check if transcoding is needed
           const needsTranscode = api.needsTranscoding(texPtr);
 
           if (needsTranscode) {
-            if (this.config.verbose) {
-              console.log('[KTX2] Starting transcoding to RGBA32...');
-            }
+            this.log(this.LOG_VERBOSE, '[KTX2] Starting transcoding to RGBA32...');
 
             // Get RGBA32 format constant (value: 13)
             const RGBA32_FORMAT = typeof this.ktxModule.TranscodeTarget === 'function'
@@ -1695,40 +1652,30 @@ self.onmessage = async function(e) {
               throw new Error(`Transcoding failed: ${errorMsg}`);
             }
 
-            if (this.config.verbose) {
-              console.log('[KTX2] Transcoding succeeded');
-            }
+            this.log(this.LOG_VERBOSE, '[KTX2] Transcoding succeeded');
           }
 
           // Get texture data
           const dataPtr = api.getData(texPtr);
-          const baseW = api.getWidth(texPtr);
-          const baseH = api.getHeight(texPtr);
           const dataSize = api.getDataSize(texPtr);
 
-          if (this.config.verbose) {
-            console.log('[KTX2] Getting texture data...');
-            console.log('[KTX2] - Dimensions:', baseW, 'x', baseH);
-            console.log('[KTX2] - Data size:', dataSize, 'bytes');
-            console.log('[KTX2] - Data pointer:', dataPtr);
-          }
+          this.log(this.LOG_VERBOSE, '[KTX2] Getting texture data...');
+          this.log(this.LOG_VERBOSE, '[KTX2] - Dimensions:', baseW, 'x', baseH);
+          this.log(this.LOG_VERBOSE, '[KTX2] - Data size:', dataSize, 'bytes');
+          this.log(this.LOG_VERBOSE, '[KTX2] - Data pointer:', dataPtr);
 
           // Calculate expected size
           const expected = baseW * baseH * 4; // RGBA
           const total = Math.min(expected, dataSize);
 
-          if (this.config.verbose) {
-            console.log('[KTX2] - Expected size:', expected, 'bytes');
-            console.log('[KTX2] - Copying', total, 'bytes from WASM heap');
-          }
+          this.log(this.LOG_VERBOSE, '[KTX2] - Expected size:', expected, 'bytes');
+          this.log(this.LOG_VERBOSE, '[KTX2] - Copying', total, 'bytes from WASM heap');
 
           // Copy data from WASM heap
           const rgbaData = new Uint8Array(ktx.HEAPU8.buffer, dataPtr, total);
           const dataCopy = new Uint8Array(rgbaData); // Make a copy to persist after destroy
 
-          if (this.config.verbose) {
-            console.log('[KTX2] - Data copied successfully');
-          }
+          this.log(this.LOG_VERBOSE, '[KTX2] - Data copied successfully');
 
           // Cleanup texture
           api.destroy(texPtr);
@@ -1766,6 +1713,90 @@ self.onmessage = async function(e) {
       // Always free input data
       api.free(ptr);
     }
+  }
+
+  /**
+   * Assemble full KTX2 file from probe data and level payloads
+   */
+  private async assembleFullKtx2(probe: Ktx2ProbeResult, levelPayloads: Map<number, Uint8Array>): Promise<Uint8Array> {
+    // Calculate total size
+    const headerSize = probe.headerSize;
+    const dfdSize = probe.dfd.length;
+    const kvdSize = probe.kvd.length;
+    const sgdSize = probe.sgd.length;
+
+    let dataSize = 0;
+    for (const payload of levelPayloads.values()) {
+      dataSize += alignValue(payload.length, 8);
+    }
+
+    const totalSize = alignValue(headerSize + dfdSize + kvdSize + sgdSize + dataSize, 8);
+
+    // Allocate buffer (from pool if available)
+    const buffer = this.memoryPool
+      ? this.memoryPool.acquire(totalSize)
+      : new ArrayBuffer(totalSize);
+
+    const fullKtx = new Uint8Array(buffer, 0, totalSize);
+    const view = new DataView(buffer);
+
+    let offset = 0;
+
+    // 1. Copy header with updated level offsets
+    fullKtx.set(probe.headerBytes, 0);
+    offset += probe.headerBytes.length;
+
+    // 2. Copy DFD
+    if (dfdSize > 0) {
+      offset = alignValue(offset, 4);
+      fullKtx.set(probe.dfd, offset);
+      // Update DFD offset in header
+      view.setUint32(48, offset, true);
+      offset += dfdSize;
+    }
+
+    // 3. Copy KVD
+    if (kvdSize > 0) {
+      offset = alignValue(offset, 4);
+      fullKtx.set(probe.kvd, offset);
+      // Update KVD offset in header
+      view.setUint32(56, offset, true);
+      offset += kvdSize;
+    }
+
+    // 4. Copy SGD
+    if (sgdSize > 0) {
+      offset = alignValue(offset, 8);
+      fullKtx.set(probe.sgd, offset);
+      // Update SGD offset in header
+      writeU64(view, 64, offset);
+      offset += sgdSize;
+    }
+
+    // 5. Copy level payloads and update level index
+    const levelIndexOffset = 80;
+    for (let i = 0; i < probe.levelCount; i++) {
+      const payload = levelPayloads.get(i);
+      if (!payload) continue;
+
+      // Align data offset
+      offset = alignValue(offset, 8);
+
+      // Write payload
+      fullKtx.set(payload, offset);
+
+      // Update level index entry
+      const indexEntryOffset = levelIndexOffset + i * 24;
+      writeU64(view, indexEntryOffset, offset);                   // byteOffset
+      writeU64(view, indexEntryOffset + 8, payload.length);      // byteLength
+      writeU64(view, indexEntryOffset + 16, probe.levels[i].uncompressedByteLength); // uncompressedByteLength
+
+      offset += payload.length;
+    }
+
+    this.log(this.LOG_INFO, `[KTX2] Assembled full KTX2: ${(totalSize / 1024 / 1024).toFixed(2)} MB`);
+
+    return fullKtx;
   }
 
   private createTexture(probe: Ktx2ProbeResult): pc.Texture {
@@ -1847,19 +1878,15 @@ self.onmessage = async function(e) {
         if (ext) {
           const maxAniso = gl.getParameter((ext as any).MAX_TEXTURE_MAX_ANISOTROPY_EXT) || 8;
           gl.texParameterf(gl.TEXTURE_2D, (ext as any).TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, maxAniso));
-          if (this.config.verbose) {
-            console.log(`[KTX2] Anisotropy enabled: ${Math.min(8, maxAniso)}x`);
-          }
+          this.log(this.LOG_VERBOSE, `[KTX2] Anisotropy enabled: ${Math.min(8, maxAniso)}x`);
         }
       }
 
       gl.bindTexture(gl.TEXTURE_2D, prevBinding);
     }
 
-    if (this.config.verbose) {
-      console.log(`[KTX2] Created texture with format: ${useSrgb ? 'SRGBA8' : 'RGBA8'}`);
-      console.log(`[KTX2] Initialized ${probe.levelCount} mip levels with placeholder data`);
-    }
+    this.log(this.LOG_INFO, `[KTX2] Created texture with format: ${useSrgb ? 'SRGBA8' : 'RGBA8'}`);
+    this.log(this.LOG_VERBOSE, `[KTX2] Initialized ${probe.levelCount} mip levels with placeholder data`);
 
     return texture;
   }
@@ -1912,9 +1939,7 @@ self.onmessage = async function(e) {
           customMaterial.setParameter('material_minAvailableLod', minAvailableLod);
           customMaterial.setParameter('material_maxAvailableLod', maxAvailableLod);
           customMaterial.update(); // Force shader update
-          if (this.config.verbose) {
-            console.log(`[KTX2] Updated LOD window: [${minAvailableLod}, ${maxAvailableLod}]`);
-          }
+          this.log(this.LOG_VERBOSE, `[KTX2] Updated LOD window: [${minAvailableLod}, ${maxAvailableLod}]`);
         }
       } else {
         // For subsequent mip levels, we need to use WebGL2 directly
@@ -1923,14 +1948,14 @@ self.onmessage = async function(e) {
         const gl = (device as any).gl as WebGL2RenderingContext | null;
 
         if (!gl) {
-          console.error('[KTX2] WebGL2 context not available');
+          this.logError('[KTX2] WebGL2 context not available');
           return;
         }
 
         // Bind the texture - use impl._glTexture for PlayCanvas 2.12.4+
         const webglTexture = (texture as any).impl?._glTexture;
         if (!webglTexture) {
-          console.error('[KTX2] WebGL texture not found - texture.impl may not be initialized');
+          this.logError('[KTX2] WebGL texture not found - texture.impl may not be initialized');
           return;
         }
 
@@ -1973,18 +1998,14 @@ self.onmessage = async function(e) {
           customMaterial.setParameter('material_minAvailableLod', minAvailableLod);
           customMaterial.setParameter('material_maxAvailableLod', maxAvailableLod);
           customMaterial.update(); // Force shader update
-          if (this.config.verbose) {
-            console.log(`[KTX2] Updated LOD window: [${minAvailableLod}, ${maxAvailableLod}]`);
-          }
+          this.log(this.LOG_VERBOSE, `[KTX2] Updated LOD window: [${minAvailableLod}, ${maxAvailableLod}]`);
         }
       }
 
-      if (this.config.verbose) {
-        console.log(
-          `[KTX2] Uploaded level ${level} to GPU: ${result.width}x${result.height} ` +
-          `(${(result.data.byteLength / 1024).toFixed(2)} KB)`
-        );
-      }
+      this.log(this.LOG_VERBOSE,
+        `[KTX2] Uploaded level ${level} to GPU: ${result.width}x${result.height} ` +
+        `(${(result.data.byteLength / 1024).toFixed(2)} KB)`
+      );
     } catch (error) {
       console.error(`[KTX2] Failed to upload level ${level}:`, error);
     }
@@ -2029,9 +2050,7 @@ self.onmessage = async function(e) {
     (this as any)._customMaterial = customMaterial;
     (this as any)._activeTexture = texture;
 
-    if (this.config.verbose) {
-      console.log(`[KTX2] Texture applied to material with LOD uniforms [${minLod}, ${maxLod}]`);
-    }
+    this.log(this.LOG_INFO, `[KTX2] Texture applied to material with LOD uniforms [${minLod}, ${maxLod}]`);
   }
 
   /**
@@ -2054,9 +2073,7 @@ self.onmessage = async function(e) {
       // Get the camera
       const cameraSystem = this.app.systems.camera;
       if (!cameraSystem || !cameraSystem.cameras || cameraSystem.cameras.length === 0) {
-        if (this.config.verbose) {
-          console.warn('[KTX2] No camera found, starting from lowest res');
-        }
+        this.log(this.LOG_VERBOSE, '[KTX2] No camera found, starting from lowest res');
         return levelCount - 1;
       }
 
@@ -2068,9 +2085,7 @@ self.onmessage = async function(e) {
       // Get entity's bounding box
       const model = entity.model;
       if (!model || !model.meshInstances || model.meshInstances.length === 0) {
-        if (this.config.verbose) {
-          console.warn('[KTX2] Entity has no mesh instances, starting from lowest res');
-        }
+        this.log(this.LOG_VERBOSE, '[KTX2] Entity has no mesh instances, starting from lowest res');
         return levelCount - 1;
       }
 
@@ -2078,9 +2093,7 @@ self.onmessage = async function(e) {
       const aabb = meshInstance.aabb;
 
       if (!aabb) {
-        if (this.config.verbose) {
-          console.warn('[KTX2] No AABB found, starting from lowest res');
-        }
+        this.log(this.LOG_VERBOSE, '[KTX2] No AABB found, starting from lowest res');
         return levelCount - 1;
       }
 
@@ -2099,9 +2112,7 @@ self.onmessage = async function(e) {
       const screenMax = camera.camera.worldToScreen(worldMax, screenWidth, screenHeight);
 
       if (!screenMin || !screenMax) {
-        if (this.config.verbose) {
-          console.warn('[KTX2] Failed to project to screen space, starting from lowest res');
-        }
+        this.log(this.LOG_VERBOSE, '[KTX2] Failed to project to screen space, starting from lowest res');
         return levelCount - 1;
       }
 
@@ -2117,13 +2128,11 @@ self.onmessage = async function(e) {
       // Use the larger dimension
       const targetScreenSize = Math.max(screenSizeX, screenSizeY);
 
-      if (this.config.verbose) {
-        console.log('[KTX2] Adaptive calculation:', {
-          screenSize: `${screenSizeX.toFixed(0)}x${screenSizeY.toFixed(0)} px`,
-          targetSize: `${targetScreenSize.toFixed(0)} px`,
-          baseTextureSize: `${baseW}x${baseH}`,
-        });
-      }
+      this.log(this.LOG_VERBOSE, '[KTX2] Adaptive calculation:', {
+        screenSize: `${screenSizeX.toFixed(0)}x${screenSizeY.toFixed(0)} px`,
+        targetSize: `${targetScreenSize.toFixed(0)} px`,
+        baseTextureSize: `${baseW}x${baseH}`,
+      });
 
       // Find the appropriate mipmap level
       // Level 0 = full resolution (baseW × baseH)
@@ -2138,21 +2147,17 @@ self.onmessage = async function(e) {
 
         // If this mip is >= target size * margin, use it
         if (mipSize >= targetScreenSize * this.config.adaptiveMargin) {
-          if (this.config.verbose) {
-            console.log(`[KTX2] Starting from level ${level} (${mipWidth}x${mipHeight})`);
-          }
+          this.log(this.LOG_VERBOSE, `[KTX2] Starting from level ${level} (${mipWidth}x${mipHeight})`);
           return level;
         }
       }
 
       // If we get here, even the highest res isn't enough, so start from level 0
-      if (this.config.verbose) {
-        console.log('[KTX2] Starting from highest res (level 0)');
-      }
+      this.log(this.LOG_VERBOSE, '[KTX2] Starting from highest res (level 0)');
       return 0;
 
     } catch (error) {
-      console.error('[KTX2] Error calculating start level:', error);
+      this.logError('[KTX2] Error calculating start level:', error);
       return levelCount - 1;
     }
   }
