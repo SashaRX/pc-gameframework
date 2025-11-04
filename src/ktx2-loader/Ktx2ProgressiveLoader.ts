@@ -2208,112 +2208,75 @@ self.onmessage = async function(e) {
     }
 
     try {
-      // Upload to GPU using PlayCanvas Texture API
-      if (level === 0) {
-        // For the first level, use PlayCanvas API
-        const pixels = texture.lock();
-        if (pixels) {
-          pixels.set(result.data);
-          texture.unlock();
-        }
+      // Get WebGL context
+      const device = this.app.graphicsDevice;
+      const gl = (device as any).gl as WebGL2RenderingContext | null;
 
-        // Even for level 0, we need to update WebGL LOD parameters and shader uniforms
-        const device = this.app.graphicsDevice;
-        const gl = (device as any).gl as WebGL2RenderingContext | null;
-        if (gl) {
-          const webglTexture = (texture as any).impl?._glTexture;
-          if (webglTexture) {
-            const prevBinding = gl.getParameter(gl.TEXTURE_BINDING_2D);
-            gl.bindTexture(gl.TEXTURE_2D, webglTexture);
+      if (!gl) {
+        this.logError('[KTX2] WebGL2 context not available');
+        return;
+      }
 
-            // Update WebGL LOD range
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_BASE_LEVEL, minAvailableLod);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, maxAvailableLod);
+      // Get WebGL texture
+      const webglTexture = (texture as any).impl?._glTexture;
+      if (!webglTexture) {
+        this.logError('[KTX2] WebGL texture not found - texture.impl may not be initialized');
+        return;
+      }
 
-            gl.bindTexture(gl.TEXTURE_2D, prevBinding);
-          }
-        }
+      // Save previous binding to restore it later
+      const prevBinding = gl.getParameter(gl.TEXTURE_BINDING_2D);
+      gl.bindTexture(gl.TEXTURE_2D, webglTexture);
 
-        // Update shader uniforms
-        const customMaterial = (this as any)._customMaterial;
-        if (customMaterial) {
-          customMaterial.setParameter('material_minAvailableLod', minAvailableLod);
-          customMaterial.setParameter('material_maxAvailableLod', maxAvailableLod);
-          customMaterial.update(); // Force shader update
-          this.log(this.LOG_VERBOSE, `[KTX2] Updated LOD window: [${minAvailableLod}, ${maxAvailableLod}]`);
-        }
+      // Upload the mipmap level using appropriate method
+      if (isCompressed) {
+        // For compressed textures, use compressedTexImage2D
+        this.log(this.LOG_VERBOSE, `[KTX2] Uploading compressed texture level ${level} (format=${internalFormat})`);
+        gl.compressedTexImage2D(
+          gl.TEXTURE_2D,
+          level,
+          internalFormat,
+          result.width,
+          result.height,
+          0,
+          result.data
+        );
       } else {
-        // For subsequent mip levels, we need to use WebGL2 directly
-        // PlayCanvas doesn't expose a high-level API for uploading specific mip levels
-        const device = this.app.graphicsDevice;
-        const gl = (device as any).gl as WebGL2RenderingContext | null;
+        // For uncompressed RGBA, use texImage2D
+        const useSrgb = this.config.isSrgb;
+        const rgbaFormat = useSrgb ? gl.SRGB8_ALPHA8 : gl.RGBA8;
 
-        if (!gl) {
-          this.logError('[KTX2] WebGL2 context not available');
-          return;
-        }
+        this.log(this.LOG_VERBOSE, `[KTX2] Uploading RGBA texture level ${level}`);
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          level,
+          rgbaFormat,
+          result.width,
+          result.height,
+          0,
+          gl.RGBA,  // format (always RGBA for source data)
+          gl.UNSIGNED_BYTE,
+          result.data
+        );
+      }
 
-        // Bind the texture - use impl._glTexture for PlayCanvas 2.12.4+
-        const webglTexture = (texture as any).impl?._glTexture;
-        if (!webglTexture) {
-          this.logError('[KTX2] WebGL texture not found - texture.impl may not be initialized');
-          return;
-        }
+      // Update LOD range to show progressively better quality
+      // We load from level 13 (1x1) down to level 0 (8192x8192)
+      // BASE_LEVEL = best quality available (minAvailableLod)
+      // MAX_LEVEL = worst quality available (maxAvailableLod)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_BASE_LEVEL, minAvailableLod);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, maxAvailableLod);
 
-        // Save previous binding to restore it later
-        const prevBinding = gl.getParameter(gl.TEXTURE_BINDING_2D);
-        gl.bindTexture(gl.TEXTURE_2D, webglTexture);
+      // Restore previous binding
+      gl.bindTexture(gl.TEXTURE_2D, prevBinding);
 
-        // Upload the mipmap level using appropriate method
-        if (isCompressed) {
-          // For compressed textures, use compressedTexImage2D
-          this.log(this.LOG_VERBOSE, `[KTX2] Uploading compressed texture level ${level} (format=${internalFormat})`);
-          gl.compressedTexImage2D(
-            gl.TEXTURE_2D,
-            level,
-            internalFormat,
-            result.width,
-            result.height,
-            0,
-            result.data
-          );
-        } else {
-          // For uncompressed RGBA, use texImage2D
-          const useSrgb = this.config.isSrgb;
-          const rgbaFormat = useSrgb ? gl.SRGB8_ALPHA8 : gl.RGBA8;
-
-          this.log(this.LOG_VERBOSE, `[KTX2] Uploading RGBA texture level ${level}`);
-          gl.texImage2D(
-            gl.TEXTURE_2D,
-            level,
-            rgbaFormat,
-            result.width,
-            result.height,
-            0,
-            gl.RGBA,  // format (always RGBA for source data)
-            gl.UNSIGNED_BYTE,
-            result.data
-          );
-        }
-
-        // Update LOD range to show progressively better quality
-        // We load from level 13 (1x1) down to level 0 (8192x8192)
-        // BASE_LEVEL = best quality available (minAvailableLod)
-        // MAX_LEVEL = worst quality available (maxAvailableLod)
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_BASE_LEVEL, minAvailableLod);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, maxAvailableLod);
-
-        // Restore previous binding
-        gl.bindTexture(gl.TEXTURE_2D, prevBinding);
-
-        // Update shader uniform for LOD clamping
-        const customMaterial = (this as any)._customMaterial;
-        if (customMaterial) {
-          customMaterial.setParameter('material_minAvailableLod', minAvailableLod);
-          customMaterial.setParameter('material_maxAvailableLod', maxAvailableLod);
-          customMaterial.update(); // Force shader update
-          this.log(this.LOG_VERBOSE, `[KTX2] Updated LOD window: [${minAvailableLod}, ${maxAvailableLod}]`);
-        }
+      // Update shader uniform for LOD clamping
+      const customMaterial = (this as any)._customMaterial;
+      if (customMaterial) {
+        customMaterial.setParameter('material_minAvailableLod', minAvailableLod);
+        customMaterial.setParameter('material_maxAvailableLod', maxAvailableLod);
+        customMaterial.update(); // Force shader update
+        this.log(this.LOG_VERBOSE, `[KTX2] Updated LOD window: [${minAvailableLod}, ${maxAvailableLod}]`);
       }
 
       this.log(this.LOG_VERBOSE,
