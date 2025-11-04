@@ -189,7 +189,7 @@ build/esm/
 ## 🚧 Phase 3: Performance Optimization (IN PROGRESS)
 
 **Goal:** Improve loading speed and reduce main thread blocking
-**Status:** 🚧 50% Complete
+**Status:** 🚧 75% Complete
 **Priority:** High
 **Timeline:** Started 2025-01-04
 
@@ -260,25 +260,50 @@ loader.destroy();                  // Cleanup resources
 - Delay clamped to [minStepDelayMs, maxStepDelayMs]
 - RAF-based timing for smooth frame pacing
 
-### Milestone 3.3: Advanced Caching ⏳
+### Milestone 3.3: Advanced Caching ✅
 
 **File:** `src/ktx2-loader/KtxCacheManager.ts`
 
 **Tasks:**
-- [ ] Checksum validation (SHA-256 of original KTX2)
-- [ ] Partial cache support (use cached levels + load missing)
-- [ ] Cache size limits (max MB per origin)
-- [ ] Cache statistics API (hit rate, size, etc.)
-- [ ] Cache versioning (invalidate on loader updates)
-- [ ] Preload API (cache textures in background)
+- ✅ IndexedDB implementation with object stores
+- ✅ Cache size limits with LRU eviction
+- ✅ Cache statistics API (hits, misses, hit rate, size)
+- ✅ TTL-based expiration (clearOld)
+- ✅ Partial cache support (getMipList, loadMip, saveMip)
+- ✅ Timestamp-based indexing for LRU
+- [ ] Checksum validation (SHA-256) - future enhancement
+- [ ] Preload API - future enhancement
 
-**New Methods:**
+**Implementation:**
 ```typescript
 class KtxCacheManager {
-  getCacheStats(): Promise<CacheStats>;
-  setMaxSize(megabytes: number): void;
-  preloadTexture(url: string): Promise<void>;
-  validateChecksum(url: string, checksum: string): Promise<boolean>;
+  async getCacheStats(): Promise<CacheStats>;  // ✅ Implemented
+  setMaxSize(megabytes: number): void;         // ✅ Implemented
+  async loadMip(url, level): Promise<CachedMip | null>; // ✅ Implemented
+  async saveMip(url, level, data, metadata): Promise<void>; // ✅ Implemented
+  async clearOld(maxAgeDays): Promise<void>;   // ✅ Implemented
+  async clear(): Promise<void>;                // ✅ Implemented
+  close(): void;                               // ✅ Implemented
+}
+```
+
+**Public API in Ktx2ProgressiveLoader:**
+```typescript
+loader.getCacheStats();          // Get cache statistics
+loader.clearCache();             // Clear entire cache
+loader.setCacheMaxSize(100);     // Set max size (MB)
+```
+
+**CacheStats interface:**
+```typescript
+{
+  totalSize: number;      // Total cache size in bytes
+  itemCount: number;      // Number of cached items
+  hits: number;           // Cache hits since init
+  misses: number;         // Cache misses since init
+  hitRate: number;        // Hit rate percentage
+  oldestTimestamp: number;
+  newestTimestamp: number;
 }
 ```
 

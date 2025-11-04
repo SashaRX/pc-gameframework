@@ -137,7 +137,7 @@ build/esm/                         # Compiled output (7 files)
 - ✅ Enhanced FPS throttling with RAF
 - ✅ Pause/resume API
 - ✅ Adaptive delay adjustment
-- Advanced cache features
+- ✅ Advanced caching (IndexedDB, LRU, stats)
 - Memory monitoring
 
 ### Planned

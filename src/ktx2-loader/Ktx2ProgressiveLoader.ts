@@ -246,6 +246,42 @@ void getAlbedo() {
   }
 
   /**
+   * Get cache statistics
+   */
+  async getCacheStats() {
+    if (!this.cacheManager) {
+      throw new Error('Cache not enabled');
+    }
+    return this.cacheManager.getCacheStats();
+  }
+
+  /**
+   * Clear cache
+   */
+  async clearCache(): Promise<void> {
+    if (!this.cacheManager) {
+      throw new Error('Cache not enabled');
+    }
+    await this.cacheManager.clear();
+    if (this.config.verbose) {
+      console.log('[KTX2] Cache cleared');
+    }
+  }
+
+  /**
+   * Set cache size limit
+   */
+  setCacheMaxSize(megabytes: number): void {
+    if (!this.cacheManager) {
+      throw new Error('Cache not enabled');
+    }
+    this.cacheManager.setMaxSize(megabytes);
+    if (this.config.verbose) {
+      console.log(`[KTX2] Cache max size set to ${megabytes}MB`);
+    }
+  }
+
+  /**
    * Cleanup: cancel pending RAF requests and terminate worker
    */
   destroy(): void {
@@ -257,6 +293,9 @@ void getAlbedo() {
       this.worker.terminate();
       this.worker = null;
       this.workerReady = false;
+    }
+    if (this.cacheManager) {
+      this.cacheManager.close();
     }
     if (this.config.verbose) {
       console.log('[KTX2] Loader destroyed');
