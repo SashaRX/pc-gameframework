@@ -66,6 +66,29 @@ export class Ktx2LoaderScript extends Script {
    */
   stepDelayMs = 150;
 
+  /**
+   * @attribute
+   */
+  adaptiveThrottling = false;
+
+  /**
+   * @attribute
+   * @range [30, 120]
+   */
+  targetFps = 60;
+
+  /**
+   * @attribute
+   * @range [0, 1000]
+   */
+  minStepDelayMs = 0;
+
+  /**
+   * @attribute
+   * @range [0, 2000]
+   */
+  maxStepDelayMs = 500;
+
   private loader: Ktx2ProgressiveLoader | null = null;
   private texture: any = null;
 
@@ -83,6 +106,10 @@ export class Ktx2LoaderScript extends Script {
       console.log('  - useWorker:', this.useWorker);
       console.log('  - adaptiveLoading:', this.adaptiveLoading);
       console.log('  - stepDelayMs:', this.stepDelayMs);
+      console.log('  - adaptiveThrottling:', this.adaptiveThrottling);
+      console.log('  - targetFps:', this.targetFps);
+      console.log('  - minStepDelayMs:', this.minStepDelayMs);
+      console.log('  - maxStepDelayMs:', this.maxStepDelayMs);
     }
 
     try {
@@ -98,6 +125,10 @@ export class Ktx2LoaderScript extends Script {
         useWorker: this.useWorker,
         adaptiveLoading: this.adaptiveLoading,
         stepDelayMs: this.stepDelayMs,
+        adaptiveThrottling: this.adaptiveThrottling,
+        targetFps: this.targetFps,
+        minStepDelayMs: this.minStepDelayMs,
+        maxStepDelayMs: this.maxStepDelayMs,
       });
 
       // Initialize loader
@@ -149,7 +180,7 @@ export class Ktx2LoaderScript extends Script {
   onDestroy() {
     // Очистка ресурсов
     if (this.loader) {
-      this.loader.dispose();
+      this.loader.destroy();
       this.loader = null;
     }
 
