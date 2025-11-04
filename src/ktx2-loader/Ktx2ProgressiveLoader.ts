@@ -249,35 +249,51 @@ export class Ktx2ProgressiveLoader {
     const chunks = (pc as any).ShaderChunks.get(device, (pc as any).SHADERLANGUAGE_GLSL);
 
     chunks.set('diffusePS', `
-// diffusePS — анизотропия сохраняется, LOD клампится в [min,max]
+// diffusePS — Progressive LOD with hardware anisotropic filtering
 uniform sampler2D texture_diffuseMap;
-uniform float material_minAvailableLod; // min LOD, = BASE_LEVEL
-uniform float material_maxAvailableLod; // max LOD, = MAX_LEVEL
+uniform float material_minAvailableLod; // min LOD (best quality available)
+uniform float material_maxAvailableLod; // max LOD (worst quality available)
 
 void getAlbedo() {
     dAlbedo = vec3(1.0);
     #ifdef STD_DIFFUSE_TEXTURE
         vec2 uv = {STD_DIFFUSE_TEXTURE_UV};
 
-        // Производные в нормализованных UV
+        // Calculate derivatives in normalized UV space
         vec2 dudx = dFdx(uv);
         vec2 dudy = dFdy(uv);
 
-        // Оценка auto-LOD
-        vec2 texSize = vec2(textureSize(texture_diffuseMap, 0));
-        float rho2 = max(dot(dudx * texSize, dudx * texSize),
-                         dot(dudy * texSize, dudy * texSize));
-        float autoLod = 0.5 * log2(rho2);
+        // Get texture size at the base (best available) level
+        // This is critical for progressive loading - use minAvailableLod, not 0!
+        int baseLod = int(material_minAvailableLod);
+        vec2 texSize = vec2(textureSize(texture_diffuseMap, baseLod));
 
-        // Клампим в доступное окно
+        // Convert UV derivatives to texel space
+        vec2 duvdx = dudx * texSize;
+        vec2 duvdy = dudy * texSize;
+
+        // Calculate both major and minor axis for anisotropic filtering
+        // This is important for sharp angles where one axis stretches more than the other
+        float majorAxis2 = max(dot(duvdx, duvdx), dot(duvdy, duvdy));
+        float minorAxis2 = min(dot(duvdx, duvdx), dot(duvdy, duvdy));
+
+        // Use the minor axis for LOD calculation to prevent over-blurring
+        // This is the key for sharp angles - we want the sharpest detail possible
+        float autoLod = 0.5 * log2(max(minorAxis2, 1e-8));
+
+        // Clamp LOD to available range [minAvailableLod, maxAvailableLod]
+        // This prevents sampling from unavailable mip levels
         float targetLod = clamp(autoLod,
                                 material_minAvailableLod,
                                 material_maxAvailableLod);
 
-        // Масштабируем производные
+        // Scale derivatives to match target LOD
+        // This maintains correct filtering while staying within available mip range
         float scale = exp2(targetLod - autoLod);
 
-        // Аппаратная анизотропия + трилинеар
+        // Sample with hardware anisotropic filtering + trilinear
+        // textureGrad respects BASE_LEVEL and MAX_LEVEL set via WebGL
+        // Hardware aniso will handle the major/minor axis ratio automatically
         dAlbedo = textureGrad(texture_diffuseMap, uv,
                              dudx * scale, dudy * scale).rgb;
     #endif
@@ -510,20 +526,20 @@ void getAlbedo() {
       this.log(this.LOG_VERBOSE, `[KTX2] Found ${cachedLevels.length} cached levels:`, cachedLevels);
     }
 
-    // 4. Create texture
-    const texture = this.createTexture(probe);
-    
-    // 5. Progressive loading loop
+    // 4. Select transcode format based on GPU capabilities (BEFORE creating texture)
+    const transcodeConfig = this.selectTranscodeFormat(probe.colorSpace.hasAlpha);
+    this.log(this.LOG_INFO, `[KTX2] Selected transcode format: ${transcodeConfig.format} (compressed=${transcodeConfig.isCompressed})`);
+
+    // 5. Create texture with correct format
+    const texture = this.createTexture(probe, transcodeConfig.isCompressed);
+
+    // 6. Progressive loading loop
     // Load from lowest quality (highest mip index) to highest quality (mip 0)
     let lastFrameTime = performance.now();
 
     // If adaptive loading is enabled, only load the starting level
     // Additional levels will be loaded by updateAdaptiveLoading() when camera moves closer
     const targetLevel = this.config.adaptiveLoading ? startLevel : 0;
-
-    // Select transcode format based on GPU capabilities
-    const transcodeConfig = this.selectTranscodeFormat(probe.colorSpace.hasAlpha);
-    this.log(this.LOG_INFO, `[KTX2] Selected transcode format: ${transcodeConfig.format} (compressed=${transcodeConfig.isCompressed})`);
 
     // Track LOD range: min = best quality (lowest number), max = worst quality (highest number)
     let minAvailableLod = startLevel;
@@ -2092,7 +2108,7 @@ self.onmessage = async function(e) {
     return fullKtx;
   }
 
-  private createTexture(probe: Ktx2ProbeResult): pc.Texture {
+  private createTexture(probe: Ktx2ProbeResult, isCompressed: boolean): pc.Texture {
     // Determine pixel format based on colorspace
     // In PlayCanvas 2.x, color textures (diffuse, albedo, etc) should use sRGB formats
     // Linear formats are used for data textures (normal maps, roughness, etc)
@@ -2114,49 +2130,68 @@ self.onmessage = async function(e) {
 
     texture.name = `ktx2_${probe.url.split('/').pop()}`;
 
-    // Initialize base mip level with placeholder data
-    // This is REQUIRED to create the WebGL texture object
-    // Without this, texture.impl._glTexture will be undefined
-    {
-      const initSize = probe.width * probe.height * 4;
-      const initData = new Uint8Array(initSize);
-      // Fill with gray color (128, 128, 128, 255)
-      for (let i = 0; i < initSize; i += 4) {
-        initData[i] = 128;     // R
-        initData[i + 1] = 128; // G
-        initData[i + 2] = 128; // B
-        initData[i + 3] = 255; // A
-      }
-      const pixels = texture.lock();
-      pixels.set(initData);
-      texture.unlock();
-    }
-
-    // Initialize all mipmap levels with placeholder data
-    // This ensures the WebGL texture is fully allocated
+    // Initialize texture data
+    // For both RGBA and compressed: we create a minimal 1x1 RGBA texture first
+    // This ensures PlayCanvas creates the WebGL texture properly
+    // For compressed textures, we'll replace all levels with compressed data
     const device = this.app.graphicsDevice;
     const gl = (device as any).gl as WebGL2RenderingContext | null;
+
+    // Create minimal 1x1 RGBA texture to initialize PlayCanvas texture system
+    const initData = new Uint8Array([128, 128, 128, 255]); // 1x1 gray pixel
+    const pixels = texture.lock();
+    pixels.set(initData);
+    texture.unlock();
+
+    if (!isCompressed) {
+      // RGBA path: Initialize all mipmap levels with full-size placeholder data
+      const glTexture = (texture as any).impl?._glTexture;
+      if (gl && glTexture) {
+        const prevBinding = gl.getParameter(gl.TEXTURE_BINDING_2D);
+        gl.bindTexture(gl.TEXTURE_2D, glTexture);
+
+        // Re-initialize level 0 with correct size
+        const initSize = probe.width * probe.height * 4;
+        const fullInitData = new Uint8Array(initSize);
+        for (let i = 0; i < initSize; i += 4) {
+          fullInitData[i] = 128;
+          fullInitData[i + 1] = 128;
+          fullInitData[i + 2] = 128;
+          fullInitData[i + 3] = 255;
+        }
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, probe.width, probe.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, fullInitData);
+
+        // Initialize all mip levels > 0
+        for (let i = 1; i < probe.levelCount; i++) {
+          const mipWidth = Math.max(1, probe.width >> i);
+          const mipHeight = Math.max(1, probe.height >> i);
+          const mipSize = mipWidth * mipHeight * 4;
+          const mipData = new Uint8Array(mipSize);
+          for (let j = 0; j < mipSize; j += 4) {
+            mipData[j] = 128;
+            mipData[j + 1] = 128;
+            mipData[j + 2] = 128;
+            mipData[j + 3] = 255;
+          }
+          gl.texImage2D(gl.TEXTURE_2D, i, gl.RGBA, mipWidth, mipHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, mipData);
+        }
+
+        gl.bindTexture(gl.TEXTURE_2D, prevBinding);
+      }
+
+      this.log(this.LOG_VERBOSE, `[KTX2] Initialized ${probe.levelCount} RGBA mip levels with placeholder data`);
+    } else {
+      // Compressed path: WebGL texture already created by texture.lock/unlock
+      // We'll replace the 1x1 RGBA data with compressed data during upload
+      this.log(this.LOG_VERBOSE, `[KTX2] Compressed texture initialized (1x1 placeholder, will be replaced with compressed data)`);
+    }
+
+    // Set WebGL parameters for mipmapping and filtering
     const glTexture = (texture as any).impl?._glTexture;
 
     if (gl && glTexture) {
       const prevBinding = gl.getParameter(gl.TEXTURE_BINDING_2D);
       gl.bindTexture(gl.TEXTURE_2D, glTexture);
-
-      // Initialize all mip levels > 0
-      for (let i = 1; i < probe.levelCount; i++) {
-        const mipWidth = Math.max(1, probe.width >> i);
-        const mipHeight = Math.max(1, probe.height >> i);
-        const mipSize = mipWidth * mipHeight * 4;
-        const mipData = new Uint8Array(mipSize);
-        // Fill with gray
-        for (let j = 0; j < mipSize; j += 4) {
-          mipData[j] = 128;
-          mipData[j + 1] = 128;
-          mipData[j + 2] = 128;
-          mipData[j + 3] = 255;
-        }
-        gl.texImage2D(gl.TEXTURE_2D, i, gl.RGBA, mipWidth, mipHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, mipData);
-      }
 
       // Set base and max levels for progressive loading
       // Start with the lowest quality mip (highest index)
@@ -2178,8 +2213,7 @@ self.onmessage = async function(e) {
       gl.bindTexture(gl.TEXTURE_2D, prevBinding);
     }
 
-    this.log(this.LOG_INFO, `[KTX2] Created texture with format: ${useSrgb ? 'SRGBA8' : 'RGBA8'}`);
-    this.log(this.LOG_VERBOSE, `[KTX2] Initialized ${probe.levelCount} mip levels with placeholder data`);
+    this.log(this.LOG_INFO, `[KTX2] Created texture with format: ${useSrgb ? 'SRGBA8' : 'RGBA8'} (compressed=${isCompressed})`);
 
     return texture;
   }
