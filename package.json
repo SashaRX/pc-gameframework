@@ -21,7 +21,7 @@
   "scripts": {
     "build": "npm run build:esm",
     "build:amd": "tsc --project tsconfig.debug.json",
-    "build:esm": "tsc --project tsconfig.esm.json && npm run rename-to-mjs",
+    "build:esm": "tsc --project tsconfig.esm.json && node scripts/build-worker-inline.mjs && npm run rename-to-mjs",
     "build:clean": "node -e \"const fs = require('fs'); if (fs.existsSync('build')) fs.rmSync('build', {recursive: true}); console.log('✅ Cleaned build/')\" && npm run build:esm",
     "rename-to-mjs": "node scripts/rename-to-mjs.js",
     "build:debug": "npm run build:amd",

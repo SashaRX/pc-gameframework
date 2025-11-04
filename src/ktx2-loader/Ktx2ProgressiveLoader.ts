@@ -418,12 +418,342 @@ void getAlbedo() {
   }
 
   // ============================================================================
-  // Private Methods - Stubs (TODO: Implement)
+  // Private Methods
   // ============================================================================
 
+  /**
+   * Get worker code (inline or from file)
+   */
+  private async getWorkerCode(): Promise<string> {
+    // TODO: Import from worker-inline.js after build
+    // For now, return minimal worker stub
+    return `
+// KTX2 Transcode Worker (stub - will be replaced with full implementation)
+let ktxModule = null;
+let ktxApi = null;
+let isInitialized = false;
+
+function createKtxApi(module) {
+  return {
+    malloc: module.cwrap('malloc', 'number', ['number']),
+    free: module.cwrap('free', null, ['number']),
+    createFromMemory: module.cwrap('ktxTexture2_CreateFromMemory', 'number', ['number', 'number', 'number', 'number']),
+    destroy: module.cwrap('ktxTexture2_Destroy', null, ['number']),
+    transcode: module.cwrap('ktxTexture2_TranscodeBasis', 'number', ['number', 'number', 'number']),
+    needsTranscoding: module.cwrap('ktxTexture2_NeedsTranscoding', 'number', ['number']),
+    getData: module.cwrap('ktx_get_data', 'number', ['number']),
+    getDataSize: module.cwrap('ktx_get_data_size', 'number', ['number']),
+    getWidth: module.cwrap('ktx_get_base_width', 'number', ['number']),
+    getHeight: module.cwrap('ktx_get_base_height', 'number', ['number']),
+    getLevels: module.cwrap('ktx_get_num_levels', 'number', ['number']),
+    getOffset: module.cwrap('ktx_get_image_offset', 'number', ['number', 'number', 'number', 'number']),
+    errorString: module.cwrap('ktxErrorString', 'string', ['number']),
+  };
+}
+
+async function initializeModule(libktxCode, wasmUrl) {
+  let modifiedCode = libktxCode.replace(/import\\.meta\\.url/g, '"' + wasmUrl + '"');
+  modifiedCode = modifiedCode.replace(/import\\.meta/g, '{url: "' + wasmUrl + '"}');
+  modifiedCode = modifiedCode.replace(/\\bexport\\s+default\\s+/g, '');
+  modifiedCode = modifiedCode.replace(/\\bexport\\s+\\{[^}]*\\}/g, '');
+  modifiedCode = modifiedCode.replace(/\\bexport\\s+(const|let|var|function|class)\\s+/g, '$1 ');
+
+  const wrappedCode = \`
+    (function() {
+      \${modifiedCode}
+      return typeof LIBKTX !== 'undefined' ? LIBKTX : (typeof createKtxModule !== 'undefined' ? createKtxModule : null);
+    })();
+  \`;
+
+  const factory = (0, eval)(wrappedCode);
+  if (!factory || typeof factory !== 'function') {
+    throw new Error('Could not extract createKtxModule factory');
+  }
+
+  const wasmResponse = await fetch(wasmUrl);
+  if (!wasmResponse.ok) {
+    throw new Error('Failed to fetch WASM: ' + wasmResponse.status);
+  }
+  const wasmBinary = await wasmResponse.arrayBuffer();
+
+  ktxModule = await factory({
+    wasmBinary: wasmBinary,
+    locateFile: function(path) {
+      if (path.endsWith('.wasm')) {
+        return wasmUrl;
+      }
+      return path;
+    }
+  });
+
+  ktxApi = createKtxApi(ktxModule);
+  isInitialized = true;
+}
+
+function transcodeMainThread(miniKtx) {
+  if (!ktxModule || !ktxApi) {
+    throw new Error('Worker not initialized');
+  }
+
+  const heapBefore = ktxModule.HEAPU8.length;
+  const api = ktxApi;
+  const ktx = ktxModule;
+
+  const ptr = api.malloc(miniKtx.byteLength);
+  if (!ptr) {
+    throw new Error('Failed to allocate WASM memory');
+  }
+
+  try {
+    ktx.HEAPU8.set(miniKtx, ptr);
+
+    const outPtrPtr = api.malloc(4);
+    if (!outPtrPtr) {
+      api.free(ptr);
+      throw new Error('Failed to allocate output pointer');
+    }
+
+    try {
+      const rc = api.createFromMemory(ptr, miniKtx.byteLength, 0, outPtrPtr);
+      if (rc !== 0) {
+        const errorMsg = api.errorString ? api.errorString(rc) : 'Error code ' + rc;
+        throw new Error('ktxTexture2_CreateFromMemory failed: ' + errorMsg);
+      }
+
+      const texPtr = ktx.getValue(outPtrPtr, '*');
+      api.free(outPtrPtr);
+
+      if (!texPtr) {
+        throw new Error('Texture pointer is null');
+      }
+
+      try {
+        const needsTranscode = api.needsTranscoding(texPtr);
+        if (needsTranscode) {
+          const RGBA32_FORMAT = typeof ktxModule.TranscodeTarget === 'function' ? 13 : (ktxModule.TranscodeTarget.RGBA32?.value ?? 13);
+          const rcT = api.transcode(texPtr, RGBA32_FORMAT, 0);
+          if (rcT !== 0) {
+            const errorMsg = api.errorString ? api.errorString(rcT) : 'Error code ' + rcT;
+            api.destroy(texPtr);
+            throw new Error('Transcoding failed: ' + errorMsg);
+          }
+        }
+
+        const dataPtr = api.getData(texPtr);
+        const baseW = api.getWidth(texPtr);
+        const baseH = api.getHeight(texPtr);
+        const dataSize = api.getDataSize(texPtr);
+
+        const expected = baseW * baseH * 4;
+        const total = Math.min(expected, dataSize);
+
+        const rgbaData = new Uint8Array(ktx.HEAPU8.buffer, dataPtr, total);
+        const dataCopy = new Uint8Array(rgbaData);
+
+        api.destroy(texPtr);
+
+        const heapAfter = ktx.HEAPU8.length;
+        const heapFreed = Math.max(0, heapBefore - heapAfter);
+
+        return {
+          width: baseW,
+          height: baseH,
+          data: dataCopy,
+          heapStats: {
+            before: heapBefore,
+            after: heapAfter,
+            freed: heapFreed,
+          },
+        };
+
+      } catch (innerError) {
+        api.destroy(texPtr);
+        throw innerError;
+      }
+
+    } catch (outPtrError) {
+      throw outPtrError;
+    }
+
+  } catch (error) {
+    api.free(ptr);
+    throw error;
+  } finally {
+    api.free(ptr);
+  }
+}
+
+self.onmessage = async function(e) {
+  const message = e.data;
+
+  if (message.type === 'init') {
+    try {
+      await initializeModule(message.data.libktxCode, message.data.wasmUrl);
+      self.postMessage({ type: 'init', success: true });
+    } catch (error) {
+      self.postMessage({ type: 'init', success: false, error: error.message, stack: error.stack });
+    }
+
+  } else if (message.type === 'transcode') {
+    try {
+      if (!isInitialized) {
+        throw new Error('Worker not initialized');
+      }
+
+      const miniKtx = new Uint8Array(message.data.miniKtx);
+      const result = transcodeMainThread(miniKtx);
+
+      self.postMessage({
+        type: 'transcode',
+        success: true,
+        messageId: message.messageId,
+        width: result.width,
+        height: result.height,
+        data: result.data,
+        heapStats: result.heapStats,
+      }, [result.data.buffer]);
+
+    } catch (error) {
+      self.postMessage({
+        type: 'transcode',
+        success: false,
+        messageId: message.messageId,
+        error: error.message,
+        stack: error.stack,
+      });
+    }
+  }
+};
+`;
+  }
+
   private async initWorker(libktxModuleUrl?: string, libktxWasmUrl?: string): Promise<boolean> {
-    // TODO: Implement worker initialization
-    return false;
+    if (this.config.verbose) {
+      console.log('[KTX2] Initializing Web Worker...');
+    }
+
+    try {
+      // Get URLs (external or Asset Registry)
+      const loader = LibktxLoader.getInstance();
+      let mjsUrl = libktxModuleUrl || this.config.libktxModuleUrl;
+      let wasmUrl = libktxWasmUrl || this.config.libktxWasmUrl;
+
+      if (!mjsUrl || !wasmUrl) {
+        // Fallback to Asset Registry
+        const mjsAsset = this.app.assets.find('libktx.mjs', 'binary') || this.app.assets.find('libktx.mjs', 'script');
+        const wasmAsset = this.app.assets.find('libktx.wasm', 'wasm') || this.app.assets.find('libktx.wasm', 'binary');
+
+        if (!mjsAsset || !wasmAsset) {
+          if (this.config.verbose) {
+            console.warn('[KTX2] Worker: libktx assets not found');
+          }
+          return false;
+        }
+
+        const mjsUrlNullable = mjsAsset.getFileUrl();
+        const wasmUrlNullable = wasmAsset.getFileUrl();
+
+        if (!mjsUrlNullable || !wasmUrlNullable) {
+          if (this.config.verbose) {
+            console.warn('[KTX2] Worker: Asset URLs not available');
+          }
+          return false;
+        }
+
+        mjsUrl = mjsUrlNullable;
+        wasmUrl = wasmUrlNullable;
+      }
+
+      // Load worker code as text (inline for now, can be external in future)
+      const workerCode = await this.getWorkerCode();
+
+      const blob = new Blob([workerCode], { type: 'application/javascript' });
+      const workerUrl = URL.createObjectURL(blob);
+      this.worker = new Worker(workerUrl);
+
+      // Setup message handler
+      this.worker.onmessage = (e: MessageEvent) => {
+        const response = e.data;
+
+        if (response.messageId !== undefined) {
+          const callbacks = this.workerPendingCallbacks.get(response.messageId);
+          if (callbacks) {
+            this.workerPendingCallbacks.delete(response.messageId);
+
+            if (response.success) {
+              callbacks.resolve(response);
+            } else {
+              callbacks.reject(new Error(response.error || 'Worker error'));
+            }
+          }
+        }
+      };
+
+      this.worker.onerror = (error: ErrorEvent) => {
+        if (this.config.verbose) {
+          console.error('[KTX2] Worker error:', error);
+        }
+      };
+
+      // Load libktx code
+      const mjsResponse = await fetch(mjsUrl);
+      if (!mjsResponse.ok) {
+        throw new Error(`Failed to fetch libktx.mjs: ${mjsResponse.status}`);
+      }
+      const libktxCode = await mjsResponse.text();
+
+      // Initialize worker
+      const initPromise = new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Worker initialization timeout'));
+        }, 10000); // 10s timeout
+
+        const tempHandler = (e: MessageEvent) => {
+          clearTimeout(timeout);
+          this.worker!.removeEventListener('message', tempHandler);
+
+          if (e.data.type === 'init') {
+            if (e.data.success) {
+              this.workerReady = true;
+              resolve();
+            } else {
+              reject(new Error(e.data.error || 'Worker init failed'));
+            }
+          }
+        };
+
+        this.worker!.addEventListener('message', tempHandler);
+
+        this.worker!.postMessage({
+          type: 'init',
+          data: {
+            libktxCode: libktxCode,
+            wasmUrl: wasmUrl,
+          },
+        });
+      });
+
+      await initPromise;
+
+      if (this.config.verbose) {
+        console.log('[KTX2] Worker initialized successfully');
+      }
+
+      return true;
+
+    } catch (error) {
+      if (this.config.verbose) {
+        console.warn('[KTX2] Worker initialization failed:', error);
+      }
+
+      // Cleanup on failure
+      if (this.worker) {
+        this.worker.terminate();
+        this.worker = null;
+      }
+
+      return false;
+    }
   }
 
   /**
@@ -1032,12 +1362,53 @@ void getAlbedo() {
    * Routes to worker if available, otherwise uses main thread
    */
   private async transcode(miniKtx: Uint8Array): Promise<Ktx2TranscodeResult> {
-    // For now, use main thread (worker implementation is TODO)
+    // Use worker if available and ready
+    if (this.config.useWorker && this.workerReady && this.worker) {
+      return this.transcodeWorker(miniKtx);
+    }
+
+    // Fallback to main thread
     if (!this.ktxModule) {
       throw new Error('libktx not initialized. Call initialize() first.');
     }
 
     return this.transcodeMainThread(miniKtx);
+  }
+
+  /**
+   * Transcode using Web Worker
+   */
+  private async transcodeWorker(miniKtx: Uint8Array): Promise<Ktx2TranscodeResult> {
+    if (!this.worker || !this.workerReady) {
+      throw new Error('Worker not ready');
+    }
+
+    const messageId = this.workerMessageId++;
+
+    return new Promise((resolve, reject) => {
+      // Store callbacks
+      this.workerPendingCallbacks.set(messageId, { resolve, reject });
+
+      // Send transcode request
+      this.worker!.postMessage(
+        {
+          type: 'transcode',
+          messageId: messageId,
+          data: {
+            miniKtx: miniKtx.buffer,
+          },
+        },
+        [miniKtx.buffer] // Transfer ownership for zero-copy
+      );
+
+      // Timeout after 30s
+      setTimeout(() => {
+        if (this.workerPendingCallbacks.has(messageId)) {
+          this.workerPendingCallbacks.delete(messageId);
+          reject(new Error('Worker transcode timeout'));
+        }
+      }, 30000);
+    });
   }
 
   /**
