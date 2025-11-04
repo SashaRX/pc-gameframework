@@ -24,7 +24,7 @@ import type {
 } from './types';
 import { KtxCacheManager } from './KtxCacheManager';
 import { MemoryPool } from './MemoryPool';
-import { GpuFormatDetector } from './GpuFormatDetector';
+import { GpuFormatDetector, TextureFormat } from './GpuFormatDetector';
 import { alignValue, readU64asNumber, writeU64 } from './utils/alignment';
 import { parseDFDColorSpace } from './utils/colorspace';
 import { LibktxLoader } from './LibktxLoader';
@@ -145,6 +145,24 @@ export class Ktx2ProgressiveLoader {
   private logWarn(...args: any[]): void {
     if (this.config.logLevel >= this.LOG_INFO) {
       console.warn(...args);
+    }
+  }
+
+  /**
+   * Map KtxTranscodeFormat (number) to GpuFormatDetector.TextureFormat (enum)
+   */
+  private getTextureFormatFromTranscodeFormat(transcodeFormat: number): TextureFormat {
+    // Map transcode format number to TextureFormat enum
+    switch (transcodeFormat) {
+      case 0: return TextureFormat.ETC1_RGB;
+      case 1: return TextureFormat.ETC2_RGBA;
+      case 2: return TextureFormat.BC1_RGB;
+      case 3: return TextureFormat.BC3_RGBA;
+      case 6: return TextureFormat.BC7_RGBA;
+      case 8: return TextureFormat.PVRTC1_4_RGB;
+      case 9: return TextureFormat.PVRTC1_4_RGBA;
+      case 10: return TextureFormat.ASTC_4x4;
+      default: return TextureFormat.RGBA8;
     }
   }
 
@@ -284,7 +302,7 @@ void getAlbedo() {
     const wasmUrl = libktxWasmUrl || this.config.libktxWasmUrl;
 
     // Initialize GPU format detector
-    const gl = this.app.graphicsDevice.gl;
+    const gl = (this.app.graphicsDevice as any).gl as WebGL2RenderingContext | WebGLRenderingContext;
     this.gpuFormatDetector = new GpuFormatDetector(gl);
 
     if (this.config.logLevel >= this.LOG_INFO) {
@@ -585,8 +603,21 @@ void getAlbedo() {
       this.minLoadedLod = minAvailableLod;
       this.maxLoadedLod = maxAvailableLod;
 
+      // Get WebGL internal format for the selected transcode format
+      const webglInternalFormat = transcodeConfig.isCompressed && this.gpuFormatDetector
+        ? this.gpuFormatDetector.getInternalFormat(this.getTextureFormatFromTranscodeFormat(transcodeConfig.format))
+        : 0; // 0 for RGBA (will use default in uploadMipLevel)
+
       // Upload to GPU with progressive LOD update
-      this.uploadMipLevel(texture, i, result, minAvailableLod, maxAvailableLod);
+      this.uploadMipLevel(
+        texture,
+        i,
+        result,
+        minAvailableLod,
+        maxAvailableLod,
+        transcodeConfig.isCompressed,
+        webglInternalFormat
+      );
       loadStats.levelsLoaded++;
 
       // Apply texture to entity after first level is loaded
@@ -778,6 +809,9 @@ void getAlbedo() {
       if (!lvl || lvl.byteLength === 0) continue;
 
       try {
+        // Select transcode format based on texture alpha channel
+        const transcodeConfig = this.selectTranscodeFormat(probe.colorSpace.hasAlpha);
+
         // Check cache first
         let result: Ktx2TranscodeResult | null = null;
 
@@ -803,9 +837,6 @@ void getAlbedo() {
 
           const mini = this.repackSingleLevel(probe, level, payload);
 
-          // Select transcode format based on texture alpha channel
-          const transcodeConfig = this.selectTranscodeFormat(probe.colorSpace.hasAlpha);
-
           const transcodeStart = performance.now();
           result = await this.transcode(mini, transcodeConfig.format, transcodeConfig.isCompressed);
           const transcodeTime = performance.now() - transcodeStart;
@@ -826,8 +857,21 @@ void getAlbedo() {
         this.minLoadedLod = Math.min(this.minLoadedLod, level);
         this.maxLoadedLod = Math.max(this.maxLoadedLod, level);
 
+        // Get WebGL internal format for the selected transcode format
+        const webglInternalFormat = transcodeConfig.isCompressed && this.gpuFormatDetector
+          ? this.gpuFormatDetector.getInternalFormat(this.getTextureFormatFromTranscodeFormat(transcodeConfig.format))
+          : 0; // 0 for RGBA (will use default in uploadMipLevel)
+
         // Upload to GPU with correct LOD range
-        this.uploadMipLevel(this.activeTexture, level, result, this.minLoadedLod, this.maxLoadedLod);
+        this.uploadMipLevel(
+          this.activeTexture,
+          level,
+          result,
+          this.minLoadedLod,
+          this.maxLoadedLod,
+          transcodeConfig.isCompressed,
+          webglInternalFormat
+        );
 
       } catch (error) {
         this.log(this.LOG_ERROR, `[KTX2] Failed to load additional level ${level}:`, error);
@@ -2149,7 +2193,15 @@ self.onmessage = async function(e) {
    * @param minAvailableLod - Best quality level available (lowest number)
    * @param maxAvailableLod - Worst quality level available (highest number)
    */
-  private uploadMipLevel(texture: pc.Texture, level: number, result: Ktx2TranscodeResult, minAvailableLod: number, maxAvailableLod: number): void {
+  private uploadMipLevel(
+    texture: pc.Texture,
+    level: number,
+    result: Ktx2TranscodeResult,
+    minAvailableLod: number,
+    maxAvailableLod: number,
+    isCompressed: boolean,
+    internalFormat: number
+  ): void {
     if (!result.data || result.data.length === 0) {
       console.error(`[KTX2] Cannot upload level ${level}: empty data`);
       return;
@@ -2212,24 +2264,37 @@ self.onmessage = async function(e) {
         const prevBinding = gl.getParameter(gl.TEXTURE_BINDING_2D);
         gl.bindTexture(gl.TEXTURE_2D, webglTexture);
 
-        // Determine internal format based on texture format
-        // PlayCanvas 2.x requires correct sRGB internal formats
-        const useSrgb = this.config.isSrgb;
-        const internalFormat = useSrgb ? gl.SRGB8_ALPHA8 : gl.RGBA8;
+        // Upload the mipmap level using appropriate method
+        if (isCompressed) {
+          // For compressed textures, use compressedTexImage2D
+          this.log(this.LOG_VERBOSE, `[KTX2] Uploading compressed texture level ${level} (format=${internalFormat})`);
+          gl.compressedTexImage2D(
+            gl.TEXTURE_2D,
+            level,
+            internalFormat,
+            result.width,
+            result.height,
+            0,
+            result.data
+          );
+        } else {
+          // For uncompressed RGBA, use texImage2D
+          const useSrgb = this.config.isSrgb;
+          const rgbaFormat = useSrgb ? gl.SRGB8_ALPHA8 : gl.RGBA8;
 
-        // Upload the mipmap level
-        // texImage2D(target, level, internalformat, width, height, border, format, type, pixels)
-        gl.texImage2D(
-          gl.TEXTURE_2D,
-          level,
-          internalFormat,
-          result.width,
-          result.height,
-          0,
-          gl.RGBA,  // format (always RGBA for source data)
-          gl.UNSIGNED_BYTE,
-          result.data
-        );
+          this.log(this.LOG_VERBOSE, `[KTX2] Uploading RGBA texture level ${level}`);
+          gl.texImage2D(
+            gl.TEXTURE_2D,
+            level,
+            rgbaFormat,
+            result.width,
+            result.height,
+            0,
+            gl.RGBA,  // format (always RGBA for source data)
+            gl.UNSIGNED_BYTE,
+            result.data
+          );
+        }
 
         // Update LOD range to show progressively better quality
         // We load from level 13 (1x1) down to level 0 (8192x8192)
