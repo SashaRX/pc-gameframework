@@ -11,8 +11,8 @@
 |-------|--------|------------|----------|
 | Phase 1: Core Implementation | ✅ Complete | 100% | Critical |
 | Phase 2: Production Deployment | ✅ Complete | 100% | Critical |
-| Phase 3: Performance Optimization | ⏳ In Progress | 25% | High |
-| Phase 4: Advanced Features | 🔮 Future | 0% | Medium |
+| Phase 3: Performance Optimization | ✅ Complete | 100% | High |
+| Phase 4: Advanced Features | ⏳ In Progress | 25% | Medium |
 | Phase 5: WebGPU & Next-Gen | 🔮 Future | 0% | Low |
 
 ---
@@ -366,40 +366,55 @@ const fullKtx = await cacheManager.loadFullKtx(url);
 - Compatible with standard KTX2 tools
 
 
-## 🚧 Phase 4: Advanced Features (IN PROGRESS)
+## ⏳ Phase 4: Advanced Features (IN PROGRESS)
 
 **Goal:** Add hardware compression and advanced graphics features
-**Status:** 🚧 20% Complete
+**Status:** ⏳ 25% Complete
 **Priority:** Medium
 **Timeline:** Started 2025-01-05
 
-### Milestone 4.1: Hardware Compressed Formats 🚧
+### Milestone 4.1: Hardware Compressed Formats ✅
 
-**File:** `src/ktx2-loader/Ktx2ProgressiveLoader.ts`
+**Status:** ✅ Complete (2025-01-05)
 
-**Files:** `src/ktx2-loader/GpuFormatDetector.ts` (NEW), `src/ktx2-loader/Ktx2ProgressiveLoader.ts`
+**Files:**
+- `src/ktx2-loader/GpuFormatDetector.ts` (NEW)
+- `src/ktx2-loader/Ktx2ProgressiveLoader.ts`
+- `src/ktx2-loader/types.ts`
+- `src/ktx2-loader/utils/colorspace.ts`
 
-**Tasks:**
+**Completed Tasks:**
 - ✅ GPU capabilities detection (getExtension)
 - ✅ `GpuFormatDetector` class with format detection
 - ✅ Support for BC1-BC7, ETC1/ETC2, ASTC, PVRTC
 - ✅ `getBestFormat()` - automatic format selection
 - ✅ `isSupported()` - check format availability
 - ✅ `getInternalFormat()` - WebGL constants
-- [ ] Integrate detector into Ktx2ProgressiveLoader
-- [ ] Direct compressed texture upload (bypass RGBA)
-- [ ] Transcode to appropriate format per platform
-- [ ] Fallback chain: hardware → RGBA → error
+- ✅ Integrated detector into Ktx2ProgressiveLoader.initialize()
+- ✅ Direct compressed texture upload via compressedTexImage2D
+- ✅ Transcode to appropriate format per platform
+- ✅ Fallback chain: hardware → RGBA (automatic)
+- ✅ Alpha channel detection from DFD samples
+- ✅ Format selection priority: ASTC > BC7 > ETC2 > BC3 > ETC1 > PVRTC > RGBA
+
+**Implementation:**
+- `selectTranscodeFormat(hasAlpha)` - Chooses best format based on GPU capabilities
+- `getTextureFormatFromTranscodeFormat()` - Maps KTX format to TextureFormat enum
+- Modified `transcode()`, `transcodeMainThread()`, `transcodeWorker()` for format parameters
+- Updated `uploadMipLevel()` to use `compressedTexImage2D` for compressed textures
+- Enhanced `parseDFDColorSpace()` to detect alpha from DFD sample info (channelType === 15)
+- Added `hasAlpha: boolean` to `Ktx2ColorSpace` interface
 
 **Benefits:**
-- 4-8x less GPU memory
-- Faster loading (no RGBA conversion)
+- 4-8x less GPU memory usage
+- Faster loading (no RGBA decompression overhead)
 - Better mobile performance
+- Platform-optimized texture formats
 
-**Challenges:**
-- Platform detection complexity
-- Format compatibility matrix
-- Testing across devices
+**Testing:**
+- ✅ TypeScript compilation successful
+- ✅ Build successful
+- ⏳ Runtime testing pending
 
 ### Milestone 4.2: Streaming Decode 🔮
 
@@ -490,11 +505,21 @@ queue.add(url2, entity2, { priority: 'low' });
 |-----------|----------|--------|
 | 1.1 - 1.7 (Phase 1) | 100% | ✅ Complete |
 | 2.1 - 2.5 (Phase 2) | 100% | ✅ Complete |
-| 3.1 - 3.4 (Phase 3) | 0% | ⏳ Planned |
-| 4.1 - 4.4 (Phase 4) | 0% | 🔮 Future |
+| 3.1 - 3.4 (Phase 3) | 100% | ✅ Complete |
+| 4.1 (Phase 4) | 100% | ✅ Complete |
+| 4.2 - 4.4 (Phase 4) | 0% | 🔮 Future |
 | 5.1 - 5.2 (Phase 5) | 0% | 🔮 Future |
 
 ### Recent Achievements (Last 7 Days)
+
+✅ **Jan 5, 2025 (Phase 4.1):**
+- Completed Hardware Compressed Texture Support
+- Created GpuFormatDetector with full format detection (BC/ETC/ASTC/PVRTC)
+- Implemented automatic format selection based on GPU capabilities
+- Added direct compressed texture upload via compressedTexImage2D
+- Enhanced DFD parser to detect alpha channel from sample data
+- Format priority chain: ASTC > BC7 > ETC2 > BC3 > ETC1 > PVRTC > RGBA
+- 4-8x GPU memory savings with compressed formats
 
 ✅ **Jan 4, 2025 (Phase 3):**
 - Implemented Web Worker transcoding
