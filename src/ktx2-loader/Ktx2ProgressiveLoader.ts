@@ -49,9 +49,19 @@ export class Ktx2ProgressiveLoader {
 
   // Cache manager
   private cacheManager: KtxCacheManager | null = null;
-  
+
   // Custom material for LOD control
   private customMaterial: pc.StandardMaterial | null = null;
+
+  // FPS tracking and adaptive throttling
+  private fpsHistory: number[] = [];
+  private lastFpsCheckTime = 0;
+  private currentStepDelay = 0;
+  private rafId: number | null = null;
+
+  // Pause/resume control
+  private isPaused = false;
+  private pauseResolve: (() => void) | null = null;
 
   constructor(app: pc.Application, config: Ktx2LoaderConfig) {
     this.app = app;
@@ -73,7 +83,14 @@ export class Ktx2ProgressiveLoader {
       minFrameInterval: config.minFrameInterval ?? 16, // 60fps
       enableCache: config.enableCache ?? true,
       cacheMaxAgeDays: config.cacheMaxAgeDays ?? 7,
+      adaptiveThrottling: config.adaptiveThrottling ?? false,
+      targetFps: config.targetFps ?? 60,
+      maxStepDelayMs: config.maxStepDelayMs ?? 500,
+      minStepDelayMs: config.minStepDelayMs ?? 0,
     };
+
+    // Initialize current step delay
+    this.currentStepDelay = this.config.stepDelayMs;
   }
 
   // ============================================================================
@@ -176,6 +193,73 @@ void getAlbedo() {
 
     if (this.config.verbose) {
       console.log('[KTX2] Loader ready');
+    }
+  }
+
+  /**
+   * Pause progressive loading
+   */
+  pause(): void {
+    this.isPaused = true;
+    if (this.config.verbose) {
+      console.log('[KTX2] Loading paused');
+    }
+  }
+
+  /**
+   * Resume progressive loading
+   */
+  resume(): void {
+    if (this.isPaused) {
+      this.isPaused = false;
+      if (this.pauseResolve) {
+        this.pauseResolve();
+        this.pauseResolve = null;
+      }
+      if (this.config.verbose) {
+        console.log('[KTX2] Loading resumed');
+      }
+    }
+  }
+
+  /**
+   * Check if loading is paused
+   */
+  isPausedState(): boolean {
+    return this.isPaused;
+  }
+
+  /**
+   * Get current FPS estimate based on recent history
+   */
+  getCurrentFps(): number {
+    if (this.fpsHistory.length === 0) return 60;
+    const sum = this.fpsHistory.reduce((a, b) => a + b, 0);
+    return sum / this.fpsHistory.length;
+  }
+
+  /**
+   * Get current adaptive step delay
+   */
+  getCurrentStepDelay(): number {
+    return this.currentStepDelay;
+  }
+
+  /**
+   * Cleanup: cancel pending RAF requests and terminate worker
+   */
+  destroy(): void {
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    if (this.worker) {
+      this.worker.terminate();
+      this.worker = null;
+      this.workerReady = false;
+    }
+    if (this.config.verbose) {
+      console.log('[KTX2] Loader destroyed');
     }
   }
 
@@ -358,15 +442,72 @@ void getAlbedo() {
         callbacks.onProgress(currentStep, totalSteps, mipInfo);
       }
 
-      // FPS limiter - delay between mip levels (except after the last one)
+      // Adaptive FPS throttling - delay between mip levels (except after the last one)
       if (i > targetLevel) {
+        // Check if paused
+        if (this.isPaused) {
+          await new Promise<void>(resolve => {
+            this.pauseResolve = resolve;
+          });
+        }
+
+        // Update FPS history
         const now = performance.now();
         const elapsed = now - lastFrameTime;
+        if (elapsed > 0) {
+          const currentFps = 1000 / elapsed;
+          this.fpsHistory.push(currentFps);
+          if (this.fpsHistory.length > 10) {
+            this.fpsHistory.shift();
+          }
+        }
+
+        // Adaptive throttling: adjust delay based on actual FPS
+        if (this.config.adaptiveThrottling && this.fpsHistory.length > 3) {
+          const avgFps = this.getCurrentFps();
+          const targetFps = this.config.targetFps;
+
+          if (avgFps < targetFps * 0.9) {
+            // FPS too low - increase delay to reduce load
+            this.currentStepDelay = Math.min(
+              this.currentStepDelay + 10,
+              this.config.maxStepDelayMs
+            );
+            if (this.config.verbose) {
+              console.log(`[KTX2] FPS low (${avgFps.toFixed(1)}), increasing delay to ${this.currentStepDelay}ms`);
+            }
+          } else if (avgFps > targetFps * 1.1) {
+            // FPS high - decrease delay to speed up loading
+            this.currentStepDelay = Math.max(
+              this.currentStepDelay - 10,
+              this.config.minStepDelayMs
+            );
+            if (this.config.verbose && this.currentStepDelay > this.config.minStepDelayMs) {
+              console.log(`[KTX2] FPS high (${avgFps.toFixed(1)}), decreasing delay to ${this.currentStepDelay}ms`);
+            }
+          }
+        } else {
+          this.currentStepDelay = this.config.stepDelayMs;
+        }
+
+        // Calculate wait time with frame budget
         const minInterval = Math.max(this.config.minFrameInterval, 0);
-        const waitTime = Math.max(minInterval - elapsed, 0) + this.config.stepDelayMs;
+        const waitTime = Math.max(minInterval - elapsed, 0) + this.currentStepDelay;
 
         if (waitTime > 0) {
-          await new Promise(resolve => setTimeout(resolve, waitTime));
+          // Use RAF for frame-accurate timing
+          await new Promise<void>(resolve => {
+            const startWait = performance.now();
+            const waitUntilRaf = () => {
+              const waitElapsed = performance.now() - startWait;
+              if (waitElapsed >= waitTime) {
+                resolve();
+              } else {
+                this.rafId = requestAnimationFrame(waitUntilRaf);
+              }
+            };
+            this.rafId = requestAnimationFrame(waitUntilRaf);
+          });
         }
 
         lastFrameTime = performance.now();
@@ -744,6 +885,9 @@ self.onmessage = async function(e) {
     } catch (error) {
       if (this.config.verbose) {
         console.warn('[KTX2] Worker initialization failed:', error);
+        if (error instanceof Error) {
+          console.warn('[KTX2] Worker error details:', error.message, error.stack);
+        }
       }
 
       // Cleanup on failure

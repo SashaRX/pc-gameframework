@@ -47,12 +47,24 @@ export interface Ktx2LoaderConfig {
   
   /** Minimum frame interval (ms) to maintain FPS */
   minFrameInterval?: number;
-  
+
   /** Enable IndexedDB cache */
   enableCache?: boolean;
-  
+
   /** Cache TTL in days */
   cacheMaxAgeDays?: number;
+
+  /** Enable adaptive FPS throttling (adjust delays based on actual FPS) */
+  adaptiveThrottling?: boolean;
+
+  /** Target FPS for adaptive throttling */
+  targetFps?: number;
+
+  /** Maximum stepDelayMs when FPS is low */
+  maxStepDelayMs?: number;
+
+  /** Minimum stepDelayMs when FPS is high */
+  minStepDelayMs?: number;
 }
 
 // ============================================================================

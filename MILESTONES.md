@@ -186,12 +186,12 @@ build/esm/
 
 ---
 
-## ⏳ Phase 3: Performance Optimization (PLANNED)
+## 🚧 Phase 3: Performance Optimization (IN PROGRESS)
 
 **Goal:** Improve loading speed and reduce main thread blocking
-**Status:** ⏳ Not Started
+**Status:** 🚧 50% Complete
 **Priority:** High
-**Estimated Timeline:** 2-4 weeks
+**Timeline:** Started 2025-01-04
 
 ### Milestone 3.1: Web Worker Transcoding ✅
 
@@ -214,30 +214,51 @@ build/esm/
 - Better UX on low-end devices
 - Support for multiple textures in parallel
 
-**Challenges:**
-- WASM module initialization in worker context
-- Shared vs Dedicated worker trade-offs
-- Memory management across contexts
+**Implementation Notes:**
+- Worker initialization via inline Blob URL
+- Build-time worker code generation (`scripts/build-worker-inline.mjs`)
+- 10s timeout for init, 30s for transcode
+- Graceful fallback to main thread
 
-### Milestone 3.2: Enhanced FPS Throttling ⏳
+### Milestone 3.2: Enhanced FPS Throttling ✅
 
 **File:** `src/ktx2-loader/Ktx2ProgressiveLoader.ts`
 
 **Tasks:**
-- [ ] `requestAnimationFrame()` integration
-- [ ] Dynamic `stepDelayMs` based on actual FPS
-- [ ] Pause/resume loading API for user interactions
-- [ ] Priority queue for multiple textures
-- [ ] Adaptive throttling (slow down on low FPS, speed up on high)
+- ✅ `requestAnimationFrame()` integration for frame-accurate timing
+- ✅ Dynamic `stepDelayMs` adjustment based on actual FPS
+- ✅ Pause/resume loading API for user interactions
+- ✅ Adaptive throttling (slow down on low FPS, speed up on high)
+- ✅ FPS history tracking (rolling 10-frame average)
+- ✅ Cleanup method (cancel RAF, terminate worker)
+
+**New API:**
+```typescript
+loader.pause();                    // Pause loading
+loader.resume();                   // Resume loading
+loader.isPausedState();            // Check if paused
+loader.getCurrentFps();            // Get current FPS estimate
+loader.getCurrentStepDelay();      // Get adaptive delay
+loader.destroy();                  // Cleanup resources
+```
 
 **Configuration:**
 ```typescript
 {
-  targetFps: 60,          // Target frame rate
-  autoThrottle: true,     // Auto-adjust delays
-  pauseOnInteraction: true // Pause during camera movement
+  adaptiveThrottling: true,   // Enable adaptive delays
+  targetFps: 60,              // Target frame rate
+  minStepDelayMs: 0,          // Min delay when FPS high
+  maxStepDelayMs: 500,        // Max delay when FPS low
+  stepDelayMs: 150,           // Initial/default delay
+  minFrameInterval: 16,       // Frame budget (60fps)
 }
 ```
+
+**Adaptive Logic:**
+- FPS < 54 (90% of target): Increase delay by 10ms
+- FPS > 66 (110% of target): Decrease delay by 10ms
+- Delay clamped to [minStepDelayMs, maxStepDelayMs]
+- RAF-based timing for smooth frame pacing
 
 ### Milestone 3.3: Advanced Caching ⏳
 

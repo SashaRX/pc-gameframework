@@ -61,10 +61,14 @@ Press Launch and check console for logs.
 | isSrgb | boolean | false | sRGB color space |
 | verbose | boolean | true | Detailed logging |
 | enableCache | boolean | true | IndexedDB cache |
-| useWorker | boolean | false | Web Worker transcoding (planned) |
+| useWorker | boolean | true | Web Worker transcoding |
 | adaptiveLoading | boolean | false | Stop at screen resolution |
 | stepDelayMs | number | 150 | Delay between levels (ms) |
 | enableAniso | boolean | true | Anisotropic filtering |
+| adaptiveThrottling | boolean | false | Auto-adjust delays based on FPS |
+| targetFps | number | 60 | Target frame rate for throttling |
+| minStepDelayMs | number | 0 | Min delay when FPS high |
+| maxStepDelayMs | number | 500 | Max delay when FPS low |
 
 ### External URLs
 
@@ -129,8 +133,10 @@ build/esm/                         # Compiled output (7 files)
 - PlayCanvas ESM script integration
 
 ### In Progress (Phase 3)
-- ✅ Web Worker transcoding (implemented)
-- Enhanced FPS throttling
+- ✅ Web Worker transcoding
+- ✅ Enhanced FPS throttling with RAF
+- ✅ Pause/resume API
+- ✅ Adaptive delay adjustment
 - Advanced cache features
 - Memory monitoring
 
