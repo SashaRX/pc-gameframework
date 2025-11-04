@@ -12,7 +12,14 @@
       "Bash(npm run build-push:esm:*)",
       "Bash(dir:*)",
       "Bash(findstr:*)",
-      "Bash(npm run build:esm:debug:*)"
+      "Bash(npm run build:esm:debug:*)",
+      "Bash(npm run build:*)",
+      "Bash(if exist build rmdir /s /q build)",
+      "Bash(npm run build:clean:*)",
+      "Bash(nul)",
+      "Bash(npm run build-push:clean:*)",
+      "Bash(npm run push:esm:*)",
+      "Bash(npm run:*)"
     ],
     "deny": [],
     "ask": []

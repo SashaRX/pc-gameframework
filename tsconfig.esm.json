@@ -13,8 +13,8 @@
     "strictPropertyInitialization": false,
     "types": ["playcanvas", "webxr"],
     "esModuleInterop": true,
-    "inlineSourceMap": true,
-    "inlineSources": true,
+    "inlineSourceMap": false,
+    "inlineSources": false,
     "experimentalDecorators": true,
     "forceConsistentCasingInFileNames": true,
     "declaration": false,
@@ -25,7 +25,6 @@
   ],
   "exclude": [
     "node_modules",
-    "src/index.ts",
-    "src/scripts/**/*"
+    "src/index.ts"
   ]
 }

@@ -25,10 +25,12 @@ import type {
 import { KtxCacheManager } from './KtxCacheManager';
 import { alignValue, readU64asNumber, writeU64 } from './utils/alignment';
 import { parseDFDColorSpace } from './utils/colorspace';
+import { LibktxLoader } from './LibktxLoader';
 
 export class Ktx2ProgressiveLoader {
   private app: pc.Application;
-  private config: Required<Ktx2LoaderConfig>;
+  private config: Required<Omit<Ktx2LoaderConfig, 'libktxModuleUrl' | 'libktxWasmUrl'>> &
+    Pick<Ktx2LoaderConfig, 'libktxModuleUrl' | 'libktxWasmUrl'>;
   
   // Worker state
   private worker: Worker | null = null;
@@ -57,6 +59,8 @@ export class Ktx2ProgressiveLoader {
     // Set defaults
     this.config = {
       ktxUrl: config.ktxUrl,
+      libktxModuleUrl: config.libktxModuleUrl,
+      libktxWasmUrl: config.libktxWasmUrl,
       progressive: config.progressive ?? true,
       isSrgb: config.isSrgb ?? false,
       stepDelayMs: config.stepDelayMs ?? 150,
@@ -137,6 +141,10 @@ void getAlbedo() {
       console.log('[KTX2] Initializing loader...');
     }
 
+    // Use URLs from config if not provided as parameters
+    const mjsUrl = libktxModuleUrl || this.config.libktxModuleUrl;
+    const wasmUrl = libktxWasmUrl || this.config.libktxWasmUrl;
+
     // Register custom shader chunk for progressive LOD clamping
     this.createShaderChunk();
 
@@ -144,10 +152,10 @@ void getAlbedo() {
     if (this.config.enableCache) {
       this.cacheManager = new KtxCacheManager('ktx2-cache', 1);
       await this.cacheManager.init();
-      
+
       // Clean old entries
       await this.cacheManager.clearOld(this.config.cacheMaxAgeDays);
-      
+
       if (this.config.verbose) {
         console.log('[KTX2] Cache initialized');
       }
@@ -155,7 +163,7 @@ void getAlbedo() {
 
     // Initialize worker
     if (this.config.useWorker) {
-      const success = await this.initWorker(libktxModuleUrl, libktxWasmUrl);
+      const success = await this.initWorker(mjsUrl, wasmUrl);
       if (!success && this.config.verbose) {
         console.warn('[KTX2] Worker initialization failed, will use main thread');
       }
@@ -163,7 +171,7 @@ void getAlbedo() {
 
     // Fallback: initialize main thread module
     if (!this.config.useWorker || !this.workerReady) {
-      await this.initMainThreadModule(libktxModuleUrl, libktxWasmUrl);
+      await this.initMainThreadModule(mjsUrl, wasmUrl);
     }
 
     if (this.config.verbose) {
@@ -424,242 +432,65 @@ void getAlbedo() {
   private async initMainThreadModule(libktxModuleUrl?: string, libktxWasmUrl?: string): Promise<void> {
     if (this.config.verbose) {
       console.log('[KTX2] Loading libktx module on main thread...');
-      console.log('[KTX2] Module URL:', libktxModuleUrl);
-      console.log('[KTX2] WASM URL:', libktxWasmUrl);
     }
 
     try {
-      // Fetch and evaluate libktx.mjs as a script
-      // This works in AMD/PlayCanvas environment
-      const scriptUrl = libktxModuleUrl;
-
-      if (!scriptUrl) {
-        throw new Error('libktxModuleUrl is required. Pass app.assets.find("libktx.mjs").getFileUrl()');
-      }
-
-      // Load the script and get the factory function
-      if (this.config.verbose) {
-        console.log('[KTX2] Loading libktx script from:', scriptUrl);
-      }
-
-      const createKtxModule = await this.loadLibktxScript(scriptUrl);
-
-      if (this.config.verbose) {
-        console.log('[KTX2] Script loaded, creating module instance...');
-      }
-
-      // Initialize the module
-      const moduleConfig: any = {};
-
-      // Track runtime initialization
-      let runtimeInitialized = false;
-      const verbose = this.config.verbose;
-
-      if (libktxWasmUrl) {
-        moduleConfig.locateFile = (filename: string) => {
-          if (this.config.verbose) {
-            console.log('[KTX2] locateFile called for:', filename);
-          }
-          if (filename.endsWith('.wasm')) {
-            if (this.config.verbose) {
-              console.log('[KTX2] Returning WASM URL:', libktxWasmUrl);
-            }
-            return libktxWasmUrl;
-          }
-          return filename;
-        };
-      }
-
-      if (this.config.verbose) {
-        console.log('[KTX2] Initializing WASM module...');
-      }
-
-      // CRITICAL: We need to wrap onRuntimeInitialized BEFORE the module fully initializes
-      // createKtxModule returns a promise, but the module object is available synchronously
-      // We need to get the module object and wrap its callback before awaiting
-      const modulePromise = createKtxModule(moduleConfig);
-
-      // The promise resolves to the module, but we need to intercept during initialization
-      // Use .then() to get the module object before it's fully initialized
-      this.ktxModule = await new Promise<KtxModule>((resolve, reject) => {
-        modulePromise.then((module: any) => {
-          if (verbose) {
-            console.log('[KTX2] Module promise resolved, checking initialization...');
-            console.log('[KTX2] Module has Ih:', typeof module.Ih);
-            console.log('[KTX2] Module has onRuntimeInitialized:', typeof module.onRuntimeInitialized);
-
-            // Debug: List ALL properties of the module
-            console.log('[KTX2] === MODULE PROPERTIES START ===');
-            const allKeys = Object.keys(module);
-            console.log('[KTX2] Total properties:', allKeys.length);
-            console.log('[KTX2] First 50 properties:', allKeys.slice(0, 50));
-
-            // Check for embind-related properties
-            const embindKeys = allKeys.filter(k => k.includes('ktx') || k.includes('Ktx') || k.includes('texture') || k.includes('Texture'));
-            console.log('[KTX2] Properties with "ktx/texture":', embindKeys);
-
-            // Check for potential C++ exports
-            const exportKeys = allKeys.filter(k => k.length === 2 || (k.length === 2 && k.match(/^[A-Z][a-z]$/)));
-            console.log('[KTX2] Short 2-letter properties (might be minified exports):', exportKeys);
-
-            // Check cwrap and embind
-            console.log('[KTX2] Has cwrap:', typeof module.cwrap);
-            console.log('[KTX2] Has ccall:', typeof module.ccall);
-            console.log('[KTX2] Has _malloc:', typeof module._malloc);
-            console.log('[KTX2] Has _free:', typeof module._free);
-            console.log('[KTX2] === MODULE PROPERTIES END ===');
-          }
-
-          // At this point, onRuntimeInitialized might have already fired
-          // Check if module is already initialized
-          if (module.ktxTexture) {
-            if (verbose) {
-              console.log('[KTX2] Module already initialized (ktxTexture exists)');
-            }
-            runtimeInitialized = true;
-            resolve(module);
-            return;
-          }
-
-          // If not initialized yet, we need to wait
-          // But since we're here after the promise resolved, it's likely already done
-          // Let's try calling Ih manually if it exists
-          if (module.Ih && typeof module.Ih === 'function') {
-            if (verbose) {
-              console.log('[KTX2] Calling Module.Ih() manually to create bindings...');
-              console.log('[KTX2] Before Ih() - Lh:', typeof module.Lh, 'Dh:', typeof module.Dh);
-            }
-
-            try {
-              module.Ih();
-
-              if (verbose) {
-                console.log('[KTX2] After Ih() - ktxTexture:', typeof module.ktxTexture);
-                console.log('[KTX2] After Ih() - ErrorCode:', typeof module.ErrorCode);
-                console.log('[KTX2] After Ih() - TranscodeTarget:', typeof module.TranscodeTarget);
-              }
-            } catch (e) {
-              if (verbose) {
-                console.log('[KTX2] Error calling Ih():', e);
-              }
-            }
-          }
-
-          // Manual fallback if Ih didn't work
-          if (!module.ktxTexture && module.Lh) {
-            if (verbose) {
-              console.log('[KTX2] Manual fallback: creating bindings from internal properties');
-            }
-            module.ktxTexture = module.Lh;
-            module.ErrorCode = module.Dh;
-            module.TranscodeTarget = module.Oh;
-            module.TranscodeFlags = module.Nh;
-          }
-
-          runtimeInitialized = true;
-          resolve(module);
-        }).catch(reject);
-      });
-
-      if (this.config.verbose) {
-        console.log('[KTX2] Module created successfully');
-      }
-
-      if (!this.ktxModule) {
-        throw new Error('Failed to create KTX module');
-      }
-
-      // Wait for module to be fully ready (if it's a promise)
-      if (typeof (this.ktxModule as any).then === 'function') {
+      // Check if module is already loaded in globalThis
+      if ((globalThis as any).__libktx_factory) {
         if (this.config.verbose) {
-          console.log('[KTX2] Module is a promise, waiting for initialization...');
+          console.log('[KTX2] Using pre-loaded libktx from globalThis');
         }
-        this.ktxModule = await (this.ktxModule as any);
-      }
+        const factory = (globalThis as any).__libktx_factory;
 
-      // Wait for WASM runtime initialization
-      // The ktxTexture constructor is created in onRuntimeInitialized callback
-      if (!runtimeInitialized) {
-        if (this.config.verbose) {
-          console.log('[KTX2] Waiting for WASM runtime initialization...');
+        // Load WASM binary
+        const wasmAsset = this.app.assets.find('libktx.wasm', 'wasm') || this.app.assets.find('libktx.wasm', 'binary');
+        if (!wasmAsset) {
+          throw new Error('libktx.wasm asset not found');
         }
 
-        // Create a promise that resolves when runtime is initialized
-        await new Promise<void>((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            reject(new Error('WASM runtime initialization timeout after 10 seconds'));
-          }, 10000);
+        const wasmUrl = wasmAsset.getFileUrl();
+        if (!wasmUrl) {
+          throw new Error('libktx.wasm URL not available');
+        }
 
-          const checkInterval = setInterval(() => {
-            if (runtimeInitialized && this.ktxModule && this.ktxModule.ktxTexture) {
-              clearInterval(checkInterval);
-              clearTimeout(timeout);
-              if (this.config.verbose) {
-                console.log('[KTX2] WASM runtime initialized successfully');
-              }
-              resolve();
+        const wasmResponse = await fetch(wasmUrl);
+        const wasmBinary = await wasmResponse.arrayBuffer();
+
+        // Initialize module
+        this.ktxModule = await factory({
+          wasmBinary: wasmBinary,
+          locateFile: (path: string) => {
+            if (path.endsWith('.wasm')) {
+              return wasmUrl;
             }
-          }, 50);
+            return path;
+          }
         });
+
+      } else {
+        // Fallback: use LibktxLoader
+        if (this.config.verbose) {
+          console.log('[KTX2] Loading libktx via LibktxLoader (fallback)...');
+        }
+        const loader = LibktxLoader.getInstance();
+        this.ktxModule = await loader.initialize(
+          this.app,
+          this.config.verbose,
+          libktxModuleUrl,
+          libktxWasmUrl
+        );
       }
 
       if (!this.ktxModule) {
-        throw new Error('Module lost during initialization');
+        throw new Error('Failed to load KTX module');
       }
 
       if (this.config.verbose) {
-        console.log('[KTX2] === MODULE INSPECTION START ===');
+        console.log('[KTX2] Module loaded successfully');
         console.log('[KTX2] Module has ktxTexture:', typeof this.ktxModule.ktxTexture);
         console.log('[KTX2] Module has ErrorCode:', typeof this.ktxModule.ErrorCode);
         console.log('[KTX2] Module has TranscodeTarget:', typeof this.ktxModule.TranscodeTarget);
         console.log('[KTX2] Module has HEAPU8:', typeof this.ktxModule.HEAPU8);
-
-        // Inspect TranscodeTarget structure
-        if (this.ktxModule.TranscodeTarget) {
-          const tt: any = this.ktxModule.TranscodeTarget;
-          console.log('[KTX2] TranscodeTarget analysis:');
-          console.log('[KTX2]   - Type:', typeof tt);
-          console.log('[KTX2]   - Is function:', typeof tt === 'function');
-          console.log('[KTX2]   - Keys:', Object.keys(tt).length > 0 ? Object.keys(tt).slice(0, 15) : '(no keys)');
-          console.log('[KTX2]   - .values property:', typeof tt.values, tt.values ? '(exists)' : '(undefined)');
-
-          // Try different access patterns
-          console.log('[KTX2]   - Trying tt.RGBA32:', tt.RGBA32);
-          console.log('[KTX2]   - Trying tt["RGBA32"]:', tt["RGBA32"]);
-          console.log('[KTX2]   - Trying tt.values?.RGBA32:', tt.values?.RGBA32);
-
-          // If it's a function, try calling it
-          if (typeof tt === 'function') {
-            console.log('[KTX2]   - Is constructor-like function');
-            try {
-              console.log('[KTX2]   - Function.name:', tt.name);
-              console.log('[KTX2]   - Function.length:', tt.length);
-            } catch (e) {
-              console.log('[KTX2]   - Error inspecting function:', e);
-            }
-          }
-        }
-
-        // Inspect ErrorCode structure
-        if (this.ktxModule.ErrorCode) {
-          const ec: any = this.ktxModule.ErrorCode;
-          console.log('[KTX2] ErrorCode analysis:');
-          console.log('[KTX2]   - Type:', typeof ec);
-          console.log('[KTX2]   - Is function:', typeof ec === 'function');
-          console.log('[KTX2]   - Keys:', Object.keys(ec).length > 0 ? Object.keys(ec).slice(0, 15) : '(no keys)');
-          console.log('[KTX2]   - .values property:', typeof ec.values, ec.values ? '(exists)' : '(undefined)');
-
-          // Try different access patterns
-          console.log('[KTX2]   - Trying ec.SUCCESS:', ec.SUCCESS);
-          console.log('[KTX2]   - Trying ec["SUCCESS"]:', ec["SUCCESS"]);
-          console.log('[KTX2]   - Trying ec.values?.SUCCESS:', ec.values?.SUCCESS);
-        }
-
-        console.log('[KTX2] === MODULE INSPECTION END ===');
-      }
-
-      if (!this.ktxModule) {
-        throw new Error('Module not initialized properly');
       }
 
       // Create cwrap API wrappers
@@ -674,45 +505,6 @@ void getAlbedo() {
       }
     } catch (error) {
       console.error('[KTX2] Failed to load libktx module:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Load libktx.mjs script dynamically using ES module import
-   * Works in PlayCanvas 2.x ESM environment
-   */
-  private async loadLibktxScript(url: string): Promise<any> {
-    if (this.config.verbose) {
-      console.log('[KTX2] Importing libktx module via dynamic import...');
-    }
-
-    try {
-      // Use dynamic import to load the ESM module
-      // This properly handles import.meta and other ESM features
-      const module = await import(/* webpackIgnore: true */ url);
-
-      if (this.config.verbose) {
-        console.log('[KTX2] Module imported successfully');
-        console.log('[KTX2] Module exports:', Object.keys(module));
-      }
-
-      // Get the default export (the factory function)
-      const createModule = module.default || module;
-
-      if (!createModule) {
-        throw new Error('No default export found in libktx module');
-      }
-
-      if (this.config.verbose) {
-        console.log('[KTX2] Got module factory function');
-      }
-
-      return createModule;
-    } catch (error) {
-      if (this.config.verbose) {
-        console.error('[KTX2] Error importing libktx module:', error);
-      }
       throw error;
     }
   }
