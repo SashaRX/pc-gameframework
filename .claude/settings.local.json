@@ -19,7 +19,9 @@
       "Bash(nul)",
       "Bash(npm run build-push:clean:*)",
       "Bash(npm run push:esm:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []

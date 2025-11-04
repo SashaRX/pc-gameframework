@@ -9,9 +9,11 @@ Progressive texture loading for PlayCanvas Engine 2.12.4+ with HTTP range reques
 - Adaptive quality based on screen size
 - IndexedDB caching for transcoded mipmaps
 - FPS throttling for non-blocking loading
-- Support for ETC1S (BasisLZ) and UASTC formats
+- External URL support (no bundling required)
 - Custom shader chunks for progressive LOD clamping
 - Anisotropic filtering support
+- Supports ETC1S (BasisLZ) and UASTC formats
+- Production-ready for published builds
 
 ## Quick Start
 
@@ -28,19 +30,21 @@ Upload from `build/esm/`:
 
 - `scripts/Ktx2LoaderScript.mjs` - Type: Script
 - `ktx2-loader/*.mjs` - Type: Script (all files in folder)
-- `libs/libktx/libktx.mjs` - Type: Script
-- `libs/libktx/libktx.wasm` - Type: wasm (or binary)
+
+Note: libktx files are loaded from external URLs, no need to upload them.
 
 ### 3. Add Script to Entity
 
 1. Select entity with model or render component
 2. Add Script Component
 3. Add Script: "ktx2Loader"
-4. Configure:
-   - KTX2 URL: `https://example.com/texture.ktx2`
-   - Progressive: true
-   - Verbose: true
-   - Enable Cache: true
+4. Configure attributes in Inspector:
+   - ktxUrl: `https://example.com/texture.ktx2`
+   - libktxMjsUrl: `https://raw.githubusercontent.com/SashaRX/ktx-host/refs/heads/main/libktx.mjs`
+   - libktxWasmUrl: `https://raw.githubusercontent.com/SashaRX/ktx-host/refs/heads/main/libktx.wasm`
+   - progressive: true
+   - verbose: true
+   - enableCache: true
 
 ### 4. Test
 
@@ -51,13 +55,24 @@ Press Launch and check console for logs.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | ktxUrl | string | required | URL to KTX2 file |
+| libktxMjsUrl | string | optional | External URL for libktx.mjs |
+| libktxWasmUrl | string | optional | External URL for libktx.wasm |
 | progressive | boolean | true | Enable progressive loading |
 | isSrgb | boolean | false | sRGB color space |
 | verbose | boolean | true | Detailed logging |
 | enableCache | boolean | true | IndexedDB cache |
+| useWorker | boolean | false | Web Worker transcoding (planned) |
 | adaptiveLoading | boolean | false | Stop at screen resolution |
 | stepDelayMs | number | 150 | Delay between levels (ms) |
 | enableAniso | boolean | true | Anisotropic filtering |
+
+### External URLs
+
+Using external URLs avoids 403 errors in PlayCanvas published builds.
+
+Recommended:
+- libktxMjsUrl: `https://raw.githubusercontent.com/SashaRX/ktx-host/refs/heads/main/libktx.mjs`
+- libktxWasmUrl: `https://raw.githubusercontent.com/SashaRX/ktx-host/refs/heads/main/libktx.wasm`
 
 ## Creating KTX2 Files
 
@@ -87,47 +102,70 @@ Requires HTTP Range support on server (CDN, S3, etc).
 src/
 ├── ktx2-loader/
 │   ├── Ktx2ProgressiveLoader.ts  # Main loader
+│   ├── LibktxLoader.ts           # External URL loader (NEW)
 │   ├── KtxCacheManager.ts        # IndexedDB cache
 │   ├── types.ts                  # TypeScript types
 │   └── utils/
 │       ├── alignment.ts          # KTX2 alignment
 │       └── colorspace.ts         # DFD parsing
 ├── scripts/
-│   └── Ktx2LoaderScriptESM.mjs   # PlayCanvas script
-build/esm/                        # Compiled output
-lib/                              # WASM/JS libraries
+│   └── Ktx2LoaderScript.ts       # PlayCanvas ESM script
+build/esm/                         # Compiled output (7 files)
 ```
 
 ## Implementation Status
 
-### Working
+### Complete
 - HTTP Range requests + KTX2 header parsing
 - Mini-KTX2 repack for single levels (ETC1S + UASTC)
 - SGD repacking for ETC1S
 - Progressive loading with LOD clamping
 - GPU upload with WebGL2
 - Custom shader chunks
-- Adaptive loading
-- IndexedDB caching
+- Adaptive loading based on screen size
+- IndexedDB caching with TTL
 - Anisotropic filtering
+- External URL support (LibktxLoader)
+- PlayCanvas ESM script integration
 
-### TODO
+### In Progress (Phase 3)
 - Web Worker transcoding
-- Hardware compressed formats (ETC, ASTC, BC)
+- Enhanced FPS throttling
+- Advanced cache features
+- Memory monitoring
+
+### Planned
+- Hardware compressed formats (ETC, ASTC, BC7)
 - WebGPU backend
+- Multi-texture parallelization
+
+See MILESTONES.md for detailed roadmap.
 
 ## Troubleshooting
 
-**"libktx not initialized"**
-- Upload `libktx.mjs` and `libktx.wasm` to PlayCanvas assets
+**403 Forbidden or libktx not initialized**
+- Use external URLs for libktx files
+- Set libktxMjsUrl and libktxWasmUrl in Inspector
 
-**"Range request failed"**
+**CORS policy error**
+- Wrong: `github.com/.../file?raw=1` (redirects)
+- Correct: `raw.githubusercontent.com/.../file` (direct)
+
+**Range request failed**
 - Server doesn't support HTTP Range header
-- Downloads full file (still works, less efficient)
+- Falls back to full file download
 
-**Pixelated texture after full load**
-- Check `[KTX2] Updated LOD window: [0, N]` appears in logs
-- Verify all mip levels loaded successfully
+**Pixelated texture**
+- Check console for LOD window updates
+- Verify all mip levels loaded
+
+**Script attributes not visible**
+- Use ESM Script format with @attribute JSDoc
+- Refresh PlayCanvas Editor
+
+**Memory issues**
+- Reduce texture size or disable cache
+- Increase stepDelayMs
 
 ## References
 
