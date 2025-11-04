@@ -822,8 +822,14 @@ self.onmessage = async function(e) {
             this.workerPendingCallbacks.delete(response.messageId);
 
             if (response.success) {
+              if (this.config.verbose) {
+                console.log(`[KTX2] Worker response #${response.messageId}: ${response.width}x${response.height}`);
+              }
               callbacks.resolve(response);
             } else {
+              if (this.config.verbose) {
+                console.error(`[KTX2] Worker error #${response.messageId}:`, response.error);
+              }
               callbacks.reject(new Error(response.error || 'Worker error'));
             }
           }
@@ -1508,10 +1514,17 @@ self.onmessage = async function(e) {
   private async transcode(miniKtx: Uint8Array): Promise<Ktx2TranscodeResult> {
     // Use worker if available and ready
     if (this.config.useWorker && this.workerReady && this.worker) {
+      if (this.config.verbose) {
+        console.log('[KTX2] Transcoding via Worker');
+      }
       return this.transcodeWorker(miniKtx);
     }
 
     // Fallback to main thread
+    if (this.config.verbose) {
+      console.log('[KTX2] Transcoding on Main Thread (worker not available)');
+    }
+
     if (!this.ktxModule) {
       throw new Error('libktx not initialized. Call initialize() first.');
     }
@@ -1528,10 +1541,15 @@ self.onmessage = async function(e) {
     }
 
     const messageId = this.workerMessageId++;
+    const startTime = performance.now();
 
     return new Promise((resolve, reject) => {
       // Store callbacks
       this.workerPendingCallbacks.set(messageId, { resolve, reject });
+
+      if (this.config.verbose) {
+        console.log(`[KTX2] Worker request #${messageId}: ${miniKtx.byteLength} bytes`);
+      }
 
       // Send transcode request
       this.worker!.postMessage(
@@ -1549,6 +1567,10 @@ self.onmessage = async function(e) {
       setTimeout(() => {
         if (this.workerPendingCallbacks.has(messageId)) {
           this.workerPendingCallbacks.delete(messageId);
+          const elapsed = performance.now() - startTime;
+          if (this.config.verbose) {
+            console.warn(`[KTX2] Worker timeout after ${elapsed.toFixed(1)}ms`);
+          }
           reject(new Error('Worker transcode timeout'));
         }
       }, 30000);
