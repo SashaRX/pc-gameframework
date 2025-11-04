@@ -72,6 +72,15 @@ export class Ktx2ProgressiveLoader {
   private isPaused = false;
   private pauseResolve: (() => void) | null = null;
 
+  // Adaptive loading state
+  private lastUpdateCheck = 0;
+  private currentTargetLod: number | undefined;
+  private loadedEntity: pc.Entity | null = null;
+  private probeData: Ktx2ProbeResult | null = null;
+  private activeTexture: pc.Texture | null = null;
+  private minLoadedLod: number = Infinity;
+  private maxLoadedLod: number = -Infinity;
+
   constructor(app: pc.Application, config: Ktx2LoaderConfig) {
     this.app = app;
     
@@ -367,6 +376,10 @@ void getAlbedo() {
     // 1. Probe the file
     const probe = await this.probe(this.config.ktxUrl);
 
+    // Store state for adaptive loading updates
+    this.probeData = probe;
+    this.loadedEntity = entity;
+
     this.log(this.LOG_INFO, '[KTX2] Probe complete:', {
       levels: probe.levelCount,
       size: `${probe.width}x${probe.height}`,
@@ -377,6 +390,9 @@ void getAlbedo() {
     const startLevel = this.config.adaptiveLoading
       ? this.calculateStartLevel(entity, probe.width, probe.height, probe.levelCount)
       : probe.levelCount - 1;
+
+    // Store current target LOD for adaptive updates
+    this.currentTargetLod = startLevel;
 
     if (this.config.adaptiveLoading) {
       this.log(this.LOG_VERBOSE, `[KTX2] Adaptive loading: starting from level ${startLevel}`);
@@ -397,7 +413,10 @@ void getAlbedo() {
     // 5. Progressive loading loop
     // Load from lowest quality (highest mip index) to highest quality (mip 0)
     let lastFrameTime = performance.now();
-    const targetLevel = 0; // Always load up to the highest quality (level 0)
+
+    // If adaptive loading is enabled, only load the starting level
+    // Additional levels will be loaded by updateAdaptiveLoading() when camera moves closer
+    const targetLevel = this.config.adaptiveLoading ? startLevel : 0;
 
     // Track LOD range: min = best quality (lowest number), max = worst quality (highest number)
     let minAvailableLod = startLevel;
@@ -472,6 +491,10 @@ void getAlbedo() {
       // Update LOD range as we load each level
       if (i < minAvailableLod) minAvailableLod = i;
       if (i > maxAvailableLod) maxAvailableLod = i;
+
+      // Track in class variables for adaptive loading
+      this.minLoadedLod = minAvailableLod;
+      this.maxLoadedLod = maxAvailableLod;
 
       // Upload to GPU with progressive LOD update
       this.uploadMipLevel(texture, i, result, minAvailableLod, maxAvailableLod);
@@ -602,6 +625,9 @@ void getAlbedo() {
       transcoded: `${(loadStats.bytesTranscoded / 1024 / 1024).toFixed(2)} MB`,
     });
 
+    // Store texture reference for adaptive loading
+    this.activeTexture = texture;
+
     return texture;
   }
 
@@ -610,6 +636,111 @@ void getAlbedo() {
    */
   dispose(): void {
     this.destroy();
+  }
+
+  /**
+   * Update adaptive loading - check if more detail is needed based on camera distance
+   * Call this from PlayCanvas script update() method
+   */
+  updateAdaptiveLoading(dt: number): void {
+    if (!this.config.adaptiveLoading) return;
+    if (!this.probeData || this.currentTargetLod === undefined || !this.loadedEntity) return;
+
+    this.lastUpdateCheck += dt;
+
+    const checkInterval = this.config.adaptiveUpdateInterval;
+    if (this.lastUpdateCheck < checkInterval) return;
+    this.lastUpdateCheck = 0;
+
+    // Temporarily reduce log level to avoid spam during adaptive updates
+    const originalLogLevel = this.config.logLevel;
+    this.config.logLevel = this.LOG_ERROR; // Only errors during update check
+
+    const newTargetLod = this.calculateStartLevel(
+      this.loadedEntity,
+      this.probeData.width,
+      this.probeData.height,
+      this.probeData.levelCount
+    );
+
+    // Restore log level
+    this.config.logLevel = originalLogLevel;
+
+    // If camera moved closer (lower LOD number = higher detail), load more detail
+    if (newTargetLod < this.currentTargetLod) {
+      this.log(this.LOG_INFO, `[KTX2] Camera closer: LOD ${this.currentTargetLod} → ${newTargetLod}, loading more detail...`);
+
+      this.loadAdditionalLevels(this.currentTargetLod - 1, newTargetLod);
+      this.currentTargetLod = newTargetLod;
+    }
+  }
+
+  /**
+   * Load additional mip levels (from higher to lower LOD)
+   * Used by adaptive loading when camera moves closer
+   */
+  private async loadAdditionalLevels(fromLod: number, toLod: number): Promise<void> {
+    if (!this.probeData || !this.activeTexture) return;
+
+    const probe = this.probeData;
+
+    for (let level = fromLod; level >= toLod; level--) {
+      const lvl = probe.levels[level];
+      if (!lvl || lvl.byteLength === 0) continue;
+
+      try {
+        // Check cache first
+        let result: Ktx2TranscodeResult | null = null;
+
+        if (this.config.enableCache && this.cacheManager) {
+          const cached = await this.cacheManager.loadMip(this.config.ktxUrl!, level);
+          if (cached) {
+            this.log(this.LOG_VERBOSE, `[KTX2] Level ${level} loaded from cache (adaptive)`);
+            result = {
+              width: cached.width,
+              height: cached.height,
+              data: cached.data,
+            };
+          }
+        }
+
+        // Download from server if not cached
+        if (!result) {
+          const payload = await this.fetchRange(
+            this.config.ktxUrl!,
+            lvl.byteOffset,
+            lvl.byteOffset + lvl.byteLength - 1
+          );
+
+          const mini = this.repackSingleLevel(probe, level, payload);
+
+          const transcodeStart = performance.now();
+          result = await this.transcode(mini);
+          const transcodeTime = performance.now() - transcodeStart;
+
+          this.log(this.LOG_INFO, `[KTX2] Loaded additional Level ${level}: ${result.width}x${result.height} (${transcodeTime.toFixed(0)}ms)`);
+
+          // Cache it
+          if (this.config.enableCache && this.cacheManager) {
+            await this.cacheManager.saveMip(this.config.ktxUrl!, level, result.data, {
+              width: result.width,
+              height: result.height,
+              timestamp: Date.now(),
+            });
+          }
+        }
+
+        // Track loaded LOD range
+        this.minLoadedLod = Math.min(this.minLoadedLod, level);
+        this.maxLoadedLod = Math.max(this.maxLoadedLod, level);
+
+        // Upload to GPU with correct LOD range
+        this.uploadMipLevel(this.activeTexture, level, result, this.minLoadedLod, this.maxLoadedLod);
+
+      } catch (error) {
+        this.log(this.LOG_ERROR, `[KTX2] Failed to load additional level ${level}:`, error);
+      }
+    }
   }
 
   // ============================================================================
@@ -2057,12 +2188,12 @@ self.onmessage = async function(e) {
    * Calculate which mipmap level to start loading from based on screen size
    *
    * Algorithm:
-   * 1. Get entity's bounding box (AABB)
+   * 1. Get entity's bounding box (AABB) from model or render component
    * 2. Project to screen space using camera
    * 3. Calculate screen size in pixels
    * 4. Find mipmap level where resolution >= screen size * margin
    *
-   * @param entity Entity with model component
+   * @param entity Entity with model or render component
    * @param baseW Base texture width (mip level 0)
    * @param baseH Base texture height (mip level 0)
    * @param levelCount Total number of mipmap levels
@@ -2082,14 +2213,24 @@ self.onmessage = async function(e) {
         return levelCount - 1;
       }
 
-      // Get entity's bounding box
-      const model = entity.model;
-      if (!model || !model.meshInstances || model.meshInstances.length === 0) {
-        this.log(this.LOG_VERBOSE, '[KTX2] Entity has no mesh instances, starting from lowest res');
+      // Get entity's bounding box from either model or render component
+      let meshInstances: any[] = [];
+      let componentType = '';
+
+      if (entity.model && entity.model.meshInstances && entity.model.meshInstances.length > 0) {
+        meshInstances = entity.model.meshInstances;
+        componentType = 'model';
+      } else if (entity.render && entity.render.meshInstances && entity.render.meshInstances.length > 0) {
+        meshInstances = entity.render.meshInstances;
+        componentType = 'render';
+      } else {
+        this.log(this.LOG_VERBOSE, '[KTX2] Entity has no mesh instances (checked model and render), starting from lowest res');
         return levelCount - 1;
       }
 
-      const meshInstance = model.meshInstances[0];
+      this.log(this.LOG_VERBOSE, `[KTX2] Using ${componentType} component for adaptive calculation`);
+
+      const meshInstance = meshInstances[0];
       const aabb = meshInstance.aabb;
 
       if (!aabb) {
@@ -2106,24 +2247,41 @@ self.onmessage = async function(e) {
       const screenWidth = device.width;
       const screenHeight = device.height;
 
-      // Project AABB to screen space
-      // worldToScreen(worldCoord, cameraWidth, cameraHeight) returns Vec3
-      const screenMin = camera.camera.worldToScreen(worldMin, screenWidth, screenHeight);
-      const screenMax = camera.camera.worldToScreen(worldMax, screenWidth, screenHeight);
+      // Project all 8 corners of AABB to screen space to get accurate bounds
+      const corners = [
+        new (pc as any).Vec3(worldMin.x, worldMin.y, worldMin.z),
+        new (pc as any).Vec3(worldMin.x, worldMin.y, worldMax.z),
+        new (pc as any).Vec3(worldMin.x, worldMax.y, worldMin.z),
+        new (pc as any).Vec3(worldMin.x, worldMax.y, worldMax.z),
+        new (pc as any).Vec3(worldMax.x, worldMin.y, worldMin.z),
+        new (pc as any).Vec3(worldMax.x, worldMin.y, worldMax.z),
+        new (pc as any).Vec3(worldMax.x, worldMax.y, worldMin.z),
+        new (pc as any).Vec3(worldMax.x, worldMax.y, worldMax.z),
+      ];
 
-      if (!screenMin || !screenMax) {
+      let minScreenX = Infinity;
+      let maxScreenX = -Infinity;
+      let minScreenY = Infinity;
+      let maxScreenY = -Infinity;
+
+      for (const corner of corners) {
+        const screenPos = camera.camera.worldToScreen(corner, screenWidth, screenHeight);
+        if (screenPos) {
+          // worldToScreen returns pixel coordinates, not normalized
+          minScreenX = Math.min(minScreenX, screenPos.x);
+          maxScreenX = Math.max(maxScreenX, screenPos.x);
+          minScreenY = Math.min(minScreenY, screenPos.y);
+          maxScreenY = Math.max(maxScreenY, screenPos.y);
+        }
+      }
+
+      if (!isFinite(minScreenX) || !isFinite(maxScreenX)) {
         this.log(this.LOG_VERBOSE, '[KTX2] Failed to project to screen space, starting from lowest res');
         return levelCount - 1;
       }
 
-      // Convert normalized coords to pixels and get bounds
-      const minX = Math.min(screenMin.x, screenMax.x) * screenWidth;
-      const maxX = Math.max(screenMin.x, screenMax.x) * screenWidth;
-      const minY = Math.min(screenMin.y, screenMax.y) * screenHeight;
-      const maxY = Math.max(screenMin.y, screenMax.y) * screenHeight;
-
-      const screenSizeX = Math.abs(maxX - minX);
-      const screenSizeY = Math.abs(maxY - minY);
+      const screenSizeX = Math.abs(maxScreenX - minScreenX);
+      const screenSizeY = Math.abs(maxScreenY - minScreenY);
 
       // Use the larger dimension
       const targetScreenSize = Math.max(screenSizeX, screenSizeY);

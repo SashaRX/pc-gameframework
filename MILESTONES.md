@@ -366,24 +366,27 @@ const fullKtx = await cacheManager.loadFullKtx(url);
 - Compatible with standard KTX2 tools
 
 
-## 🔮 Phase 4: Advanced Features (FUTURE)
+## 🚧 Phase 4: Advanced Features (IN PROGRESS)
 
 **Goal:** Add hardware compression and advanced graphics features
-**Status:** 🔮 Not Started
+**Status:** 🚧 20% Complete
 **Priority:** Medium
-**Estimated Timeline:** 4-8 weeks
+**Timeline:** Started 2025-01-05
 
-### Milestone 4.1: Hardware Compressed Formats 🔮
+### Milestone 4.1: Hardware Compressed Formats 🚧
 
 **File:** `src/ktx2-loader/Ktx2ProgressiveLoader.ts`
 
+**Files:** `src/ktx2-loader/GpuFormatDetector.ts` (NEW), `src/ktx2-loader/Ktx2ProgressiveLoader.ts`
+
 **Tasks:**
-- [ ] GPU capabilities detection (getExtension)
-- [ ] Format selection based on platform:
-  - ETC1/ETC2 (Android, iOS)
-  - ASTC (modern mobile)
-  - BC7/DXT (Desktop)
-  - PVRTC (legacy iOS)
+- ✅ GPU capabilities detection (getExtension)
+- ✅ `GpuFormatDetector` class with format detection
+- ✅ Support for BC1-BC7, ETC1/ETC2, ASTC, PVRTC
+- ✅ `getBestFormat()` - automatic format selection
+- ✅ `isSupported()` - check format availability
+- ✅ `getInternalFormat()` - WebGL constants
+- [ ] Integrate detector into Ktx2ProgressiveLoader
 - [ ] Direct compressed texture upload (bypass RGBA)
 - [ ] Transcode to appropriate format per platform
 - [ ] Fallback chain: hardware → RGBA → error

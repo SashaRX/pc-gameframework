@@ -97,6 +97,47 @@ export class Ktx2LoaderScript extends Script {
    */
   maxStepDelayMs = 500;
 
+  /**
+   * @attribute
+   * @range [16, 256]
+   * @description Max RGBA bytes in memory (MB)
+   */
+  maxRgbaMb = 64;
+
+  /**
+   * @attribute
+   * @description Enable Anisotropic Filtering
+   */
+  enableAniso = true;
+
+  /**
+   * @attribute
+   * @range [1.0, 3.0]
+   * @description Adaptive margin multiplier
+   */
+  adaptiveMargin = 1.5;
+
+  /**
+   * @attribute
+   * @range [8, 33]
+   * @description Min frame interval (ms)
+   */
+  minFrameInterval = 16;
+
+  /**
+   * @attribute
+   * @range [1, 30]
+   * @description Cache max age (days)
+   */
+  cacheMaxAgeDays = 7;
+
+  /**
+   * @attribute
+   * @range [0.1, 5.0]
+   * @description Adaptive update interval (seconds)
+   */
+  adaptiveUpdateInterval = 0.5;
+
   private loader: Ktx2ProgressiveLoader | null = null;
   private texture: any = null;
 
@@ -121,6 +162,12 @@ export class Ktx2LoaderScript extends Script {
         targetFps: this.targetFps,
         minStepDelayMs: this.minStepDelayMs,
         maxStepDelayMs: this.maxStepDelayMs,
+        maxRgbaBytes: this.maxRgbaMb * 1024 * 1024,
+        enableAniso: this.enableAniso,
+        adaptiveMargin: this.adaptiveMargin,
+        minFrameInterval: this.minFrameInterval,
+        cacheMaxAgeDays: this.cacheMaxAgeDays,
+        adaptiveUpdateInterval: this.adaptiveUpdateInterval,
       });
 
       // Initialize loader
@@ -155,7 +202,10 @@ export class Ktx2LoaderScript extends Script {
   }
 
   update(dt: number) {
-    // Можно добавить runtime logic здесь
+    // Adaptive loading - check if more detail needed based on camera distance
+    if (this.loader && this.adaptiveLoading) {
+      this.loader.updateAdaptiveLoading(dt);
+    }
   }
 
   onDestroy() {
