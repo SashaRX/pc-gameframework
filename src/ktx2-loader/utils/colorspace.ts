@@ -30,7 +30,7 @@ const PRIMARIES_NAMES: Record<number, string> = {
 
 /**
  * Parse color space information from DFD (Data Format Descriptor)
- * 
+ *
  * DFD structure (offset from start of DFD block):
  * +0:  totalSize (uint32)
  * +4:  vendorId + descriptorType (packed uint32)
@@ -39,7 +39,14 @@ const PRIMARIES_NAMES: Record<number, string> = {
  * +13: colorPrimaries (uint8)
  * +14: transferFunction (uint8)
  * +15: flags (uint8)
- * 
+ * +16+: sample information (16 bytes per sample)
+ *
+ * Sample structure:
+ * +0: bitOffset (uint16)
+ * +2: bitLength (uint8)
+ * +3: channelType (uint8) - 0=Red, 1=Green, 2=Blue, 15=Alpha
+ * ...
+ *
  * @param dfd DFD data block
  * @param verbose Enable verbose logging
  */
@@ -53,6 +60,7 @@ export function parseDFDColorSpace(
     }
     return {
       isSrgb: false,
+      hasAlpha: false,
       transferFunction: 'unknown',
       transferFunctionCode: 0,
       primaries: 'unknown',
@@ -83,6 +91,22 @@ export function parseDFDColorSpace(
     const transferName = TRANSFER_FUNCTION_NAMES[transferFunction] || `Unknown (${transferFunction})`;
     const primariesName = PRIMARIES_NAMES[colorPrimaries] || `Unknown (${colorPrimaries})`;
 
+    // Detect alpha channel from sample information
+    // Samples start at offset 16, each sample is 16 bytes
+    // ChannelType: 0=Red, 1=Green, 2=Blue, 15=Alpha
+    let hasAlpha = false;
+    const numSamples = Math.floor((dfd.length - 16) / 16);
+    for (let i = 0; i < numSamples; i++) {
+      const sampleOffset = 16 + (i * 16);
+      if (sampleOffset + 4 <= dfd.length) {
+        const channelType = view.getUint8(sampleOffset + 3);
+        if (channelType === 15) { // Alpha channel
+          hasAlpha = true;
+          break;
+        }
+      }
+    }
+
     if (verbose) {
       console.log('[DFD] Color Space Info:', {
         vendorId: vendorId === 0 ? 'Khronos' : `0x${vendorId.toString(16)}`,
@@ -92,12 +116,15 @@ export function parseDFDColorSpace(
         colorPrimaries: `${colorPrimaries} (${primariesName})`,
         isSrgb,
         isLinear,
+        hasAlpha,
+        numSamples,
       });
     }
 
     return {
       isSrgb,
       isLinear,
+      hasAlpha,
       transferFunction: transferName,
       transferFunctionCode: transferFunction,
       primaries: primariesName,
@@ -110,6 +137,7 @@ export function parseDFDColorSpace(
     console.error('[DFD] Parse error:', error);
     return {
       isSrgb: false,
+      hasAlpha: false,
       transferFunction: 'error',
       transferFunctionCode: 0,
       primaries: 'error',

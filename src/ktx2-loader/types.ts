@@ -124,6 +124,7 @@ export interface Ktx2LevelInfo {
 export interface Ktx2ColorSpace {
   isSrgb: boolean;
   isLinear?: boolean;
+  hasAlpha: boolean;
   transferFunction: string;
   transferFunctionCode: number;
   primaries: string;

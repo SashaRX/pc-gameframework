@@ -24,6 +24,7 @@ import type {
 } from './types';
 import { KtxCacheManager } from './KtxCacheManager';
 import { MemoryPool } from './MemoryPool';
+import { GpuFormatDetector } from './GpuFormatDetector';
 import { alignValue, readU64asNumber, writeU64 } from './utils/alignment';
 import { parseDFDColorSpace } from './utils/colorspace';
 import { LibktxLoader } from './LibktxLoader';
@@ -58,6 +59,9 @@ export class Ktx2ProgressiveLoader {
 
   // Memory pool
   private memoryPool: MemoryPool | null = null;
+
+  // GPU format detector
+  private gpuFormatDetector: GpuFormatDetector | null = null;
 
   // Custom material for LOD control
   private customMaterial: pc.StandardMaterial | null = null;
@@ -144,6 +148,76 @@ export class Ktx2ProgressiveLoader {
     }
   }
 
+  /**
+   * Select best transcode format based on GPU capabilities
+   * Maps GpuFormatDetector.TextureFormat to KtxTranscodeFormat
+   */
+  private selectTranscodeFormat(hasAlpha: boolean): { format: number; isCompressed: boolean } {
+    if (!this.gpuFormatDetector) {
+      // Fallback to RGBA if detector not initialized
+      return { format: 13, isCompressed: false }; // RGBA32
+    }
+
+    const capabilities = this.gpuFormatDetector.getCapabilities();
+
+    // Priority order: ASTC > BC7 > ETC2 > BC3 > ETC1 > PVRTC > RGBA
+
+    // Modern mobile - ASTC (best quality/compression ratio)
+    if (capabilities.astc) {
+      this.log(this.LOG_VERBOSE, '[KTX2] Using ASTC_4x4_RGBA format');
+      return { format: 10, isCompressed: true }; // ASTC_4x4_RGBA
+    }
+
+    // Modern desktop - BC7 (best quality)
+    if (capabilities.bptc) {
+      this.log(this.LOG_VERBOSE, '[KTX2] Using BC7_RGBA format');
+      return { format: 6, isCompressed: true }; // BC7_RGBA
+    }
+
+    // Modern mobile/iOS - ETC2
+    if (capabilities.etc) {
+      if (hasAlpha) {
+        this.log(this.LOG_VERBOSE, '[KTX2] Using ETC2_RGBA format');
+        return { format: 1, isCompressed: true }; // ETC2_RGBA
+      } else {
+        this.log(this.LOG_VERBOSE, '[KTX2] Using ETC2_RGB format (no alpha)');
+        return { format: 0, isCompressed: true }; // ETC1_RGB (libktx uses same value for ETC2_RGB)
+      }
+    }
+
+    // Desktop - BC1/BC3 (DXT1/DXT5)
+    if (capabilities.s3tc) {
+      if (hasAlpha) {
+        this.log(this.LOG_VERBOSE, '[KTX2] Using BC3_RGBA format');
+        return { format: 3, isCompressed: true }; // BC3_RGBA
+      } else {
+        this.log(this.LOG_VERBOSE, '[KTX2] Using BC1_RGB format');
+        return { format: 2, isCompressed: true }; // BC1_RGB
+      }
+    }
+
+    // Legacy Android - ETC1 (no alpha support)
+    if (capabilities.etc1 && !hasAlpha) {
+      this.log(this.LOG_VERBOSE, '[KTX2] Using ETC1_RGB format');
+      return { format: 0, isCompressed: true }; // ETC1_RGB
+    }
+
+    // Legacy iOS - PVRTC
+    if (capabilities.pvrtc) {
+      if (hasAlpha) {
+        this.log(this.LOG_VERBOSE, '[KTX2] Using PVRTC1_4_RGBA format');
+        return { format: 9, isCompressed: true }; // PVRTC1_4_RGBA
+      } else {
+        this.log(this.LOG_VERBOSE, '[KTX2] Using PVRTC1_4_RGB format');
+        return { format: 8, isCompressed: true }; // PVRTC1_4_RGB
+      }
+    }
+
+    // Fallback to uncompressed RGBA
+    this.log(this.LOG_INFO, '[KTX2] No compressed formats supported, using RGBA32');
+    return { format: 13, isCompressed: false }; // RGBA32
+  }
+
   // ============================================================================
   // Public API
   // ============================================================================
@@ -208,6 +282,14 @@ void getAlbedo() {
     // Use URLs from config if not provided as parameters
     const mjsUrl = libktxModuleUrl || this.config.libktxModuleUrl;
     const wasmUrl = libktxWasmUrl || this.config.libktxWasmUrl;
+
+    // Initialize GPU format detector
+    const gl = this.app.graphicsDevice.gl;
+    this.gpuFormatDetector = new GpuFormatDetector(gl);
+
+    if (this.config.logLevel >= this.LOG_INFO) {
+      this.gpuFormatDetector.logCapabilities();
+    }
 
     // Register custom shader chunk for progressive LOD clamping
     this.createShaderChunk();
@@ -345,6 +427,9 @@ void getAlbedo() {
     if (this.memoryPool) {
       this.memoryPool.clear();
     }
+    if (this.gpuFormatDetector) {
+      this.gpuFormatDetector = null;
+    }
     this.log(this.LOG_INFO, '[KTX2] Loader destroyed');
   }
 
@@ -418,6 +503,10 @@ void getAlbedo() {
     // Additional levels will be loaded by updateAdaptiveLoading() when camera moves closer
     const targetLevel = this.config.adaptiveLoading ? startLevel : 0;
 
+    // Select transcode format based on GPU capabilities
+    const transcodeConfig = this.selectTranscodeFormat(probe.colorSpace.hasAlpha);
+    this.log(this.LOG_INFO, `[KTX2] Selected transcode format: ${transcodeConfig.format} (compressed=${transcodeConfig.isCompressed})`);
+
     // Track LOD range: min = best quality (lowest number), max = worst quality (highest number)
     let minAvailableLod = startLevel;
     let maxAvailableLod = startLevel;
@@ -462,7 +551,7 @@ void getAlbedo() {
         const miniKtx = this.repackSingleLevel(probe, i, payload);
 
         // Transcode
-        result = await this.transcode(miniKtx);
+        result = await this.transcode(miniKtx, transcodeConfig.format, transcodeConfig.isCompressed);
 
         const transcodeTime = performance.now() - transcodeStart;
         loadStats.bytesTranscoded += result.data.byteLength;
@@ -714,8 +803,11 @@ void getAlbedo() {
 
           const mini = this.repackSingleLevel(probe, level, payload);
 
+          // Select transcode format based on texture alpha channel
+          const transcodeConfig = this.selectTranscodeFormat(probe.colorSpace.hasAlpha);
+
           const transcodeStart = performance.now();
-          result = await this.transcode(mini);
+          result = await this.transcode(mini, transcodeConfig.format, transcodeConfig.isCompressed);
           const transcodeTime = performance.now() - transcodeStart;
 
           this.log(this.LOG_INFO, `[KTX2] Loaded additional Level ${level}: ${result.width}x${result.height} (${transcodeTime.toFixed(0)}ms)`);
@@ -816,7 +908,7 @@ async function initializeModule(libktxCode, wasmUrl) {
   isInitialized = true;
 }
 
-function transcodeMainThread(miniKtx) {
+function transcodeMainThread(miniKtx, targetFormat, isCompressed) {
   if (!ktxModule || !ktxApi) {
     throw new Error('Worker not initialized');
   }
@@ -856,8 +948,7 @@ function transcodeMainThread(miniKtx) {
       try {
         const needsTranscode = api.needsTranscoding(texPtr);
         if (needsTranscode) {
-          const RGBA32_FORMAT = typeof ktxModule.TranscodeTarget === 'function' ? 13 : (ktxModule.TranscodeTarget.RGBA32?.value ?? 13);
-          const rcT = api.transcode(texPtr, RGBA32_FORMAT, 0);
+          const rcT = api.transcode(texPtr, targetFormat, 0);
           if (rcT !== 0) {
             const errorMsg = api.errorString ? api.errorString(rcT) : 'Error code ' + rcT;
             api.destroy(texPtr);
@@ -870,11 +961,17 @@ function transcodeMainThread(miniKtx) {
         const baseH = api.getHeight(texPtr);
         const dataSize = api.getDataSize(texPtr);
 
-        const expected = baseW * baseH * 4;
-        const total = Math.min(expected, dataSize);
+        // Calculate total size based on format
+        let total;
+        if (isCompressed) {
+          total = dataSize;
+        } else {
+          const expected = baseW * baseH * 4;
+          total = Math.min(expected, dataSize);
+        }
 
-        const rgbaData = new Uint8Array(ktx.HEAPU8.buffer, dataPtr, total);
-        const dataCopy = new Uint8Array(rgbaData);
+        const textureData = new Uint8Array(ktx.HEAPU8.buffer, dataPtr, total);
+        const dataCopy = new Uint8Array(textureData);
 
         api.destroy(texPtr);
 
@@ -927,7 +1024,9 @@ self.onmessage = async function(e) {
       }
 
       const miniKtx = new Uint8Array(message.data.miniKtx);
-      const result = transcodeMainThread(miniKtx);
+      const targetFormat = message.data.targetFormat || 13; // Default to RGBA32
+      const isCompressed = message.data.isCompressed || false;
+      const result = transcodeMainThread(miniKtx, targetFormat, isCompressed);
 
       self.postMessage({
         type: 'transcode',
@@ -1652,11 +1751,15 @@ self.onmessage = async function(e) {
    * Transcode mini-KTX2 to RGBA using libktx
    * Routes to worker if available, otherwise uses main thread
    */
-  private async transcode(miniKtx: Uint8Array): Promise<Ktx2TranscodeResult> {
+  private async transcode(
+    miniKtx: Uint8Array,
+    targetFormat: number,
+    isCompressed: boolean
+  ): Promise<Ktx2TranscodeResult> {
     // Use worker if available and ready
     if (this.config.useWorker && this.workerReady && this.worker) {
       this.log(this.LOG_VERBOSE, '[KTX2] Transcoding via Worker');
-      return this.transcodeWorker(miniKtx);
+      return this.transcodeWorker(miniKtx, targetFormat, isCompressed);
     }
 
     // Fallback to main thread
@@ -1666,13 +1769,17 @@ self.onmessage = async function(e) {
       throw new Error('libktx not initialized. Call initialize() first.');
     }
 
-    return this.transcodeMainThread(miniKtx);
+    return this.transcodeMainThread(miniKtx, targetFormat, isCompressed);
   }
 
   /**
    * Transcode using Web Worker
    */
-  private async transcodeWorker(miniKtx: Uint8Array): Promise<Ktx2TranscodeResult> {
+  private async transcodeWorker(
+    miniKtx: Uint8Array,
+    targetFormat: number,
+    isCompressed: boolean
+  ): Promise<Ktx2TranscodeResult> {
     if (!this.worker || !this.workerReady) {
       throw new Error('Worker not ready');
     }
@@ -1684,7 +1791,7 @@ self.onmessage = async function(e) {
       // Store callbacks
       this.workerPendingCallbacks.set(messageId, { resolve, reject });
 
-      this.log(this.LOG_VERBOSE, `[KTX2] Worker request #${messageId}: ${miniKtx.byteLength} bytes`);
+      this.log(this.LOG_VERBOSE, `[KTX2] Worker request #${messageId}: ${miniKtx.byteLength} bytes, format=${targetFormat}, compressed=${isCompressed}`);
 
       // Send transcode request
       this.worker!.postMessage(
@@ -1693,6 +1800,8 @@ self.onmessage = async function(e) {
           messageId: messageId,
           data: {
             miniKtx: miniKtx.buffer,
+            targetFormat: targetFormat,
+            isCompressed: isCompressed,
           },
         },
         [miniKtx.buffer] // Transfer ownership for zero-copy
@@ -1714,7 +1823,11 @@ self.onmessage = async function(e) {
    * Transcode on main thread using libktx (cwrap C API)
    * Based on working implementation from Ktx2ProgressiveVanilla.js
    */
-  private transcodeMainThread(miniKtx: Uint8Array): Ktx2TranscodeResult {
+  private transcodeMainThread(
+    miniKtx: Uint8Array,
+    targetFormat: number,
+    isCompressed: boolean
+  ): Ktx2TranscodeResult {
     if (!this.ktxModule || !this.ktxApi) {
       throw new Error('libktx not initialized');
     }
@@ -1767,15 +1880,11 @@ self.onmessage = async function(e) {
           const needsTranscode = api.needsTranscoding(texPtr);
 
           if (needsTranscode) {
-            this.log(this.LOG_VERBOSE, '[KTX2] Starting transcoding to RGBA32...');
+            const formatName = isCompressed ? 'compressed format' : 'RGBA32';
+            this.log(this.LOG_VERBOSE, `[KTX2] Starting transcoding to ${formatName} (format=${targetFormat})...`);
 
-            // Get RGBA32 format constant (value: 13)
-            const RGBA32_FORMAT = typeof this.ktxModule.TranscodeTarget === 'function'
-              ? 13
-              : (this.ktxModule.TranscodeTarget.RGBA32?.value ?? 13);
-
-            // Transcode to RGBA32
-            const rcT = api.transcode(texPtr, RGBA32_FORMAT, 0);
+            // Transcode to target format
+            const rcT = api.transcode(texPtr, targetFormat, 0);
 
             if (rcT !== 0) {
               const errorMsg = api.errorString ? api.errorString(rcT) : `Error code ${rcT}`;
@@ -1794,17 +1903,26 @@ self.onmessage = async function(e) {
           this.log(this.LOG_VERBOSE, '[KTX2] - Dimensions:', baseW, 'x', baseH);
           this.log(this.LOG_VERBOSE, '[KTX2] - Data size:', dataSize, 'bytes');
           this.log(this.LOG_VERBOSE, '[KTX2] - Data pointer:', dataPtr);
+          this.log(this.LOG_VERBOSE, '[KTX2] - Format:', isCompressed ? 'compressed' : 'RGBA');
 
           // Calculate expected size
-          const expected = baseW * baseH * 4; // RGBA
-          const total = Math.min(expected, dataSize);
+          let total: number;
+          if (isCompressed) {
+            // For compressed formats, use the actual data size from libktx
+            total = dataSize;
+            this.log(this.LOG_VERBOSE, '[KTX2] - Using compressed data size:', total, 'bytes');
+          } else {
+            // For RGBA, calculate expected size
+            const expected = baseW * baseH * 4; // RGBA
+            total = Math.min(expected, dataSize);
+            this.log(this.LOG_VERBOSE, '[KTX2] - Expected RGBA size:', expected, 'bytes');
+          }
 
-          this.log(this.LOG_VERBOSE, '[KTX2] - Expected size:', expected, 'bytes');
           this.log(this.LOG_VERBOSE, '[KTX2] - Copying', total, 'bytes from WASM heap');
 
           // Copy data from WASM heap
-          const rgbaData = new Uint8Array(ktx.HEAPU8.buffer, dataPtr, total);
-          const dataCopy = new Uint8Array(rgbaData); // Make a copy to persist after destroy
+          const textureData = new Uint8Array(ktx.HEAPU8.buffer, dataPtr, total);
+          const dataCopy = new Uint8Array(textureData); // Make a copy to persist after destroy
 
           this.log(this.LOG_VERBOSE, '[KTX2] - Data copied successfully');
 
