@@ -451,12 +451,14 @@ void getAlbedo() {
           });
         }
 
-        // Update FPS history
+        // Update FPS history using PlayCanvas app stats
         const now = performance.now();
         const elapsed = now - lastFrameTime;
-        if (elapsed > 0) {
-          const currentFps = 1000 / elapsed;
-          this.fpsHistory.push(currentFps);
+
+        // Get real render FPS from PlayCanvas
+        const appFps = (this.app as any).stats?.frame?.fps || 0;
+        if (appFps > 0) {
+          this.fpsHistory.push(appFps);
           if (this.fpsHistory.length > 10) {
             this.fpsHistory.shift();
           }
