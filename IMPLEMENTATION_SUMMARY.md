@@ -553,8 +553,11 @@ build/esm/
 
 ```bash
 # Create test KTX2 files:
-toktx --bcmp --genmipmap test_2048.ktx2 texture_2048.png
-toktx --uastc --uastc_quality 2 --genmipmap test_uastc.ktx2 texture.png
+# ETC1S (BasisLZ)
+toktx --t2 --encode etc1s --clevel 4 --qlevel 255 --genmipmap test_2048.ktx2 texture_2048.png
+
+# UASTC with RDO
+toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .5 --uastc_rdo_d 65536 --zcmp 22 --genmipmap test_uastc.ktx2 texture.png
 
 # Test with different sizes:
 # - 256x256 (small)
@@ -564,6 +567,8 @@ toktx --uastc --uastc_quality 2 --genmipmap test_uastc.ktx2 texture.png
 
 # Host on CDN with Range support
 ```
+
+**Note:** `--bcmp` and `--uastc <level>` are deprecated. Use `--encode etc1s` and `--encode uastc` instead.
 
 ## 📊 Performance Expectations
 

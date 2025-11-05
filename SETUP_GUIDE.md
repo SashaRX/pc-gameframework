@@ -126,12 +126,17 @@ npm run build-push:debug
 Используйте [toktx](https://github.com/KhronosGroup/KTX-Software/releases):
 
 ```bash
-# Basis универсальное сжатие
-toktx --bcmp --genmipmap texture.ktx2 input.png
+# ETC1S (BasisLZ) - универсальное сжатие
+toktx --t2 --encode etc1s --clevel 4 --qlevel 255 --genmipmap texture.ktx2 input.png
 
-# UASTC высокое качество
-toktx --uastc --uastc_quality 2 --genmipmap texture.ktx2 input.png
+# UASTC - высокое качество с RDO
+toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .5 --uastc_rdo_d 65536 --zcmp 22 --genmipmap texture.ktx2 input.png
+
+# Для normal maps
+toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .25 --uastc_rdo_d 65536 --zcmp 22 --normal_mode --assign_oetf linear --assign_primaries none --genmipmap normal.ktx2 input.png
 ```
+
+**Примечание:** `--bcmp` и `--uastc <level>` устарели. Используйте `--encode etc1s` и `--encode uastc`.
 
 ### 5.2 Размещение файла
 
@@ -315,7 +320,7 @@ Accept-Ranges: bytes
 3. Используйте CDN с хорошей скоростью
 4. Уменьшите размер KTX2 файла:
    ```bash
-   toktx --bcmp --clevel 4 --qlevel 128 texture.ktx2 input.png
+   toktx --t2 --encode etc1s --clevel 4 --qlevel 128 --genmipmap texture.ktx2 input.png
    ```
 
 ---
