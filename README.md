@@ -80,13 +80,59 @@ Recommended:
 
 ## Creating KTX2 Files
 
-```bash
-# BasisLZ (ETC1S)
-toktx --bcmp --genmipmap texture.ktx2 input.png
+### Color/Albedo Textures
 
-# UASTC (higher quality)
-toktx --uastc --uastc_quality 2 --genmipmap texture.ktx2 input.png
+```bash
+# ETC1S (BasisLZ) - Universal compression, good for solid colors
+toktx --t2 --encode etc1s --clevel 4 --qlevel 255 --genmipmap color.ktx2 input.png
+
+# UASTC - High quality for detailed textures with RDO + Zstd
+toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .5 --uastc_rdo_d 65536 --zcmp 22 --genmipmap color.ktx2 input.png
+
+# UASTC - Very high quality (lower RDO lambda)
+toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .25 --uastc_rdo_d 65536 --zcmp 22 --genmipmap color_hq.ktx2 input.png
+
+# Low quality (smaller file size)
+toktx --t2 --encode etc1s --clevel 4 --qlevel 128 --genmipmap color_low.ktx2 input.png
 ```
+
+### Normal Maps
+
+```bash
+# UASTC with normal mode and linear colorspace (recommended)
+toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .25 --uastc_rdo_d 65536 --zcmp 22 --normal_mode --assign_oetf linear --assign_primaries none --genmipmap normal.ktx2 input.png
+
+# Alternative: Keep RGB channels (prevent conversion to 2-component)
+toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .25 --uastc_rdo_d 65536 --zcmp 22 --input_swizzle rgb1 --assign_oetf linear --assign_primaries none --genmipmap normal_rgb.ktx2 input.png
+```
+
+### Roughness/Metallic/ORM Maps
+
+```bash
+# UASTC with linear colorspace
+toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .5 --uastc_rdo_d 65536 --zcmp 22 --assign_oetf linear --assign_primaries none --genmipmap orm.ktx2 input.png
+
+# ETC1S alternative (smaller size, lower quality)
+toktx --t2 --encode etc1s --clevel 4 --qlevel 192 --assign_oetf linear --assign_primaries none --genmipmap orm_low.ktx2 input.png
+```
+
+**Parameters explained:**
+- `--t2`: Output KTX2 format (required for KTX2)
+- `--encode etc1s`: ETC1S/BasisLZ compression (universal GPU support, smaller files)
+- `--encode uastc`: UASTC compression (higher quality, transcodable)
+- `--clevel 4`: ETC1S compression level (0-5, higher = slower but better compression)
+- `--qlevel 255`: ETC1S quality level (1-255, higher = better quality, lower = smaller)
+- `--uastc_quality 4`: UASTC encoding quality (0=fastest/43dB, 4=very slow/48dB)
+- `--uastc_rdo_l .25`: RDO lambda (.001-10.0, lower = higher quality, try .25-10)
+- `--uastc_rdo_d 65536`: RDO dictionary size in bytes (64-65536, default 4096)
+- `--zcmp 22`: Zstandard supercompression level (1-22, default 3, >20 needs more memory)
+- `--normal_mode`: Convert 3-component normals to 2-component X+Y format, optimize encoding
+- `--input_swizzle rgb1`: Keep RGB channels, set alpha to 1
+- `--assign_oetf linear`: Force linear transfer function (for non-color data)
+- `--assign_primaries none`: No color primaries (for non-color data)
+- `--genmipmap`: Generate full mipmap pyramid
+
+**Note:** `--bcmp` and `--uastc <level>` are deprecated. Use `--encode etc1s` and `--encode uastc` instead.
 
 Requires HTTP Range support on server (CDN, S3, etc).
 
