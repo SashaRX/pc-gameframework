@@ -1,0 +1,33 @@
+{
+  "$schema": "../../src/streaming/types.ts#StreamingConfig",
+  "description": "Example configuration for world streaming system",
+
+  "world": {
+    "gridSize": 100,
+    "totalSize": {
+      "x": 2000,
+      "z": 2000
+    }
+  },
+
+  "loading": {
+    "viewDistance": 300,
+    "priorityRadius": 150,
+    "maxConcurrentLoads": 3,
+    "memoryBudgetMB": 500
+  },
+
+  "textures": {
+    "defaultMinLevel": 8,
+    "adaptiveMargin": 1.5,
+    "stepDelayMs": 100,
+    "enableCache": true,
+    "cacheTtlDays": 30
+  },
+
+  "debug": {
+    "verbose": false,
+    "showStats": true,
+    "drawSectorBounds": true
+  }
+}

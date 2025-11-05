@@ -1,0 +1,196 @@
+{
+  "$schema": "../../src/streaming/types.ts#SectorManifest",
+  "sectorId": "x100_z200",
+  "coordinates": {
+    "x": 100,
+    "z": 200
+  },
+  "templateId": "sector_template_forest_01",
+
+  "metadata": {
+    "biome": "forest",
+    "tags": ["vegetation", "rocks"],
+    "version": "1.0"
+  },
+
+  "meshes": [
+    {
+      "id": "tree_01",
+      "targetEntity": "Tree_01",
+      "lods": [
+        {
+          "level": 0,
+          "url": "https://cdn.example.com/meshes/tree_01_lod0.glb",
+          "size": 245780,
+          "draco": true,
+          "distance": 50
+        },
+        {
+          "level": 1,
+          "url": "https://cdn.example.com/meshes/tree_01_lod1.glb",
+          "size": 98456,
+          "draco": false,
+          "distance": 150
+        },
+        {
+          "level": 2,
+          "url": "https://cdn.example.com/meshes/tree_01_lod2.glb",
+          "size": 12456,
+          "draco": false,
+          "distance": 300
+        }
+      ]
+    },
+    {
+      "id": "rock_01",
+      "targetEntity": "Rock_01",
+      "lods": [
+        {
+          "level": 0,
+          "url": "https://cdn.example.com/meshes/rock_01_lod0.glb",
+          "size": 156789,
+          "draco": true
+        },
+        {
+          "level": 1,
+          "url": "https://cdn.example.com/meshes/rock_01_lod1.glb",
+          "size": 45678
+        }
+      ]
+    },
+    {
+      "id": "ground_terrain",
+      "targetEntity": "Terrain",
+      "lods": [
+        {
+          "level": 0,
+          "url": "https://cdn.example.com/meshes/terrain_01_high.glb",
+          "size": 1245680,
+          "draco": true
+        },
+        {
+          "level": 1,
+          "url": "https://cdn.example.com/meshes/terrain_01_medium.glb",
+          "size": 456780
+        },
+        {
+          "level": 2,
+          "url": "https://cdn.example.com/meshes/terrain_01_low.glb",
+          "size": 89456
+        }
+      ]
+    }
+  ],
+
+  "materials": [
+    {
+      "id": "mat_tree_bark",
+      "masterId": "master_pbr_standard",
+      "targetEntities": ["Tree_01"],
+      "overrides": {
+        "diffuse": [0.4, 0.3, 0.2],
+        "metalness": 0.0,
+        "gloss": 0.3,
+        "useMetalness": true
+      }
+    },
+    {
+      "id": "mat_tree_leaves",
+      "masterId": "master_pbr_foliage",
+      "targetEntities": ["Tree_01_Leaves"],
+      "overrides": {
+        "diffuse": [0.2, 0.6, 0.2],
+        "metalness": 0.0,
+        "gloss": 0.2,
+        "opacity": 0.9
+      }
+    },
+    {
+      "id": "mat_rock",
+      "masterId": "master_pbr_standard",
+      "targetEntities": ["Rock_01"],
+      "overrides": {
+        "diffuse": [0.5, 0.5, 0.5],
+        "metalness": 0.0,
+        "gloss": 0.4,
+        "bumpiness": 1.5
+      }
+    },
+    {
+      "id": "mat_terrain",
+      "masterId": "master_pbr_terrain",
+      "targetEntities": ["Terrain"],
+      "overrides": {
+        "diffuse": [0.3, 0.25, 0.2],
+        "metalness": 0.0,
+        "gloss": 0.1
+      }
+    }
+  ],
+
+  "textures": [
+    {
+      "id": "tex_tree_bark_albedo",
+      "url": "https://cdn.example.com/textures/tree_bark_albedo.ktx2",
+      "targetEntity": "Tree_01",
+      "materialProperty": "diffuseMap",
+      "minLevel": 8,
+      "priority": 7,
+      "isSrgb": true
+    },
+    {
+      "id": "tex_tree_bark_normal",
+      "url": "https://cdn.example.com/textures/tree_bark_normal.ktx2",
+      "targetEntity": "Tree_01",
+      "materialProperty": "normalMap",
+      "minLevel": 9,
+      "priority": 5,
+      "isSrgb": false
+    },
+    {
+      "id": "tex_tree_leaves_albedo",
+      "url": "https://cdn.example.com/textures/tree_leaves_albedo.ktx2",
+      "targetEntity": "Tree_01_Leaves",
+      "materialProperty": "diffuseMap",
+      "minLevel": 8,
+      "priority": 6,
+      "isSrgb": true
+    },
+    {
+      "id": "tex_rock_albedo",
+      "url": "https://cdn.example.com/textures/rock_albedo.ktx2",
+      "targetEntity": "Rock_01",
+      "materialProperty": "diffuseMap",
+      "minLevel": 8,
+      "priority": 5,
+      "isSrgb": true
+    },
+    {
+      "id": "tex_rock_normal",
+      "url": "https://cdn.example.com/textures/rock_normal.ktx2",
+      "targetEntity": "Rock_01",
+      "materialProperty": "normalMap",
+      "minLevel": 9,
+      "priority": 4,
+      "isSrgb": false
+    },
+    {
+      "id": "tex_terrain_albedo",
+      "url": "https://cdn.example.com/textures/terrain_albedo.ktx2",
+      "targetEntity": "Terrain",
+      "materialProperty": "diffuseMap",
+      "minLevel": 7,
+      "priority": 8,
+      "isSrgb": true
+    },
+    {
+      "id": "tex_terrain_normal",
+      "url": "https://cdn.example.com/textures/terrain_normal.ktx2",
+      "targetEntity": "Terrain",
+      "materialProperty": "normalMap",
+      "minLevel": 8,
+      "priority": 6,
+      "isSrgb": false
+    }
+  ]
+}

@@ -385,6 +385,28 @@ void getAlbedo() {
   }
 
   /**
+   * Set loading priority (0-10, higher = faster loading)
+   * Adjusts step delay based on priority
+   */
+  setPriority(priority: number): void {
+    // Clamp priority to 0-10 range
+    const clampedPriority = Math.max(0, Math.min(10, priority));
+
+    // Map priority to delay multiplier (priority 10 = 0.2x delay, priority 0 = 2x delay)
+    // This makes high priority textures load 10x faster than low priority
+    const multiplier = 0.2 + (1.8 * (10 - clampedPriority) / 10);
+
+    // Apply multiplier to base step delay
+    const baseDelay = this.config.stepDelayMs;
+    this.currentStepDelay = Math.max(
+      this.config.minStepDelayMs,
+      Math.min(this.config.maxStepDelayMs, baseDelay * multiplier)
+    );
+
+    this.log(this.LOG_VERBOSE, `[KTX2] Priority set to ${clampedPriority}, delay: ${this.currentStepDelay}ms`);
+  }
+
+  /**
    * Get current FPS estimate based on recent history
    */
   getCurrentFps(): number {
