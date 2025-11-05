@@ -88,16 +88,59 @@ build/
 
 ### Создание тестовых KTX2 файлов
 
-```bash
-# Basis LZ (универсальное сжатие)
-toktx --bcmp --genmipmap texture.ktx2 input.png
+#### Цветные/Albedo текстуры
 
-# UASTC (высокое качество)
-toktx --uastc --uastc_quality 2 --genmipmap texture.ktx2 input.png
+```bash
+# ETC1S (BasisLZ) - универсальное сжатие
+toktx --t2 --encode etc1s --clevel 4 --qlevel 255 --genmipmap color.ktx2 input.png
+
+# UASTC - высокое качество с RDO + Zstd
+toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .5 --uastc_rdo_d 65536 --zcmp 22 --genmipmap color.ktx2 input.png
+
+# UASTC - очень высокое качество
+toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .25 --uastc_rdo_d 65536 --zcmp 22 --genmipmap color_hq.ktx2 input.png
 
 # Низкое качество (малый размер)
-toktx --bcmp --clevel 4 --qlevel 128 --genmipmap texture.ktx2 input.png
+toktx --t2 --encode etc1s --clevel 4 --qlevel 128 --genmipmap color_low.ktx2 input.png
 ```
+
+#### Normal Maps
+
+```bash
+# UASTC с normal_mode и линейным цветовым пространством (рекомендуется)
+toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .25 --uastc_rdo_d 65536 --zcmp 22 --normal_mode --assign_oetf linear --assign_primaries none --genmipmap normal.ktx2 input.png
+
+# Альтернатива: сохранить RGB каналы
+toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .25 --uastc_rdo_d 65536 --zcmp 22 --input_swizzle rgb1 --assign_oetf linear --assign_primaries none --genmipmap normal_rgb.ktx2 input.png
+```
+
+#### Roughness/Metallic/ORM
+
+```bash
+# UASTC с линейным цветовым пространством
+toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .5 --uastc_rdo_d 65536 --zcmp 22 --assign_oetf linear --assign_primaries none --genmipmap orm.ktx2 input.png
+
+# ETC1S альтернатива (меньше размер)
+toktx --t2 --encode etc1s --clevel 4 --qlevel 192 --assign_oetf linear --assign_primaries none --genmipmap orm_low.ktx2 input.png
+```
+
+**Параметры:**
+- `--t2` - формат KTX2 (обязательно для KTX2)
+- `--encode etc1s` - компрессия ETC1S/BasisLZ (меньше размер)
+- `--encode uastc` - компрессия UASTC (выше качество)
+- `--clevel 4` - уровень компрессии ETC1S (0-5)
+- `--qlevel 255` - качество ETC1S (1-255, выше = лучше)
+- `--uastc_quality 4` - качество UASTC (0=быстро/43dB, 4=медленно/48dB)
+- `--uastc_rdo_l .25` - RDO lambda (.001-10.0, ниже = лучше)
+- `--uastc_rdo_d 65536` - размер RDO словаря (64-65536)
+- `--zcmp 22` - уровень Zstandard (1-22, >20 требует больше памяти)
+- `--normal_mode` - конвертация нормалей в 2-компонентный X+Y формат
+- `--input_swizzle rgb1` - сохранить RGB, alpha=1
+- `--assign_oetf linear` - линейная передаточная функция
+- `--assign_primaries none` - без конвертации цветовых примитивов
+- `--genmipmap` - генерация полной пирамиды мипмапов
+
+**Примечание:** `--bcmp` и `--uastc <level>` устарели. Используйте `--encode etc1s` и `--encode uastc`.
 
 ### Проверка HTTP Range Support
 
