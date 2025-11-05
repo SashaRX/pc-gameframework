@@ -233,6 +233,7 @@ export interface CachedMip {
   data: Uint8Array;
   timestamp: number;
   version: string;
+  transcodeFormat: number; // KtxTranscodeFormat enum value
   fileSize?: number;
   checksum?: string;
 }

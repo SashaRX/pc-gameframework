@@ -22,7 +22,8 @@
       "Bash(npm run:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(powershell -Command \"$content = Get-Content ''src\\ktx2-loader\\Ktx2ProgressiveLoader.ts'' -Raw; $content = $content -replace ''if \\(this\\.config\\.verbose\\) \\{\\s+console\\.log\\(\\''''(.*?)''''\\)'', ''this.log(this.LOG_VERBOSE, ''''$1'''')''; $content = $content -replace ''if \\(this\\.config\\.verbose\\) \\{\\s+console\\.warn\\(\\''''(.*?)''''\\)'', ''this.logWarn(''''$1'''')''; $content = $content -replace ''if \\(this\\.config\\.verbose\\) \\{\\s+console\\.error\\(\\''''(.*?)''''\\)'', ''this.logError(''''$1'''')''; $content = $content -replace ''console\\.error\\(\\''''(.*?)''''\\)'', ''this.logError(''''$1'''')''; $content = $content -replace ''console\\.warn\\(\\''''(.*?)''''\\)'', ''this.logWarn(''''$1'''')''; Set-Content ''src\\ktx2-loader\\Ktx2ProgressiveLoader.ts'' -Value $content\")"
+      "Bash(powershell -Command \"$content = Get-Content ''src\\ktx2-loader\\Ktx2ProgressiveLoader.ts'' -Raw; $content = $content -replace ''if \\(this\\.config\\.verbose\\) \\{\\s+console\\.log\\(\\''''(.*?)''''\\)'', ''this.log(this.LOG_VERBOSE, ''''$1'''')''; $content = $content -replace ''if \\(this\\.config\\.verbose\\) \\{\\s+console\\.warn\\(\\''''(.*?)''''\\)'', ''this.logWarn(''''$1'''')''; $content = $content -replace ''if \\(this\\.config\\.verbose\\) \\{\\s+console\\.error\\(\\''''(.*?)''''\\)'', ''this.logError(''''$1'''')''; $content = $content -replace ''console\\.error\\(\\''''(.*?)''''\\)'', ''this.logError(''''$1'''')''; $content = $content -replace ''console\\.warn\\(\\''''(.*?)''''\\)'', ''this.logWarn(''''$1'''')''; Set-Content ''src\\ktx2-loader\\Ktx2ProgressiveLoader.ts'' -Value $content\")",
+      "Bash(npx tsc:*)"
     ],
     "deny": [],
     "ask": []

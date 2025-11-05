@@ -554,7 +554,7 @@ void getAlbedo() {
 
       // Try to load from cache first
       if (this.config.enableCache && cachedLevels.includes(i) && this.cacheManager) {
-        const cached = await this.cacheManager.loadMip(this.config.ktxUrl, i);
+        const cached = await this.cacheManager.loadMip(this.config.ktxUrl, i, transcodeConfig.format);
         if (cached) {
           result = {
             width: cached.width,
@@ -596,6 +596,7 @@ void getAlbedo() {
             width: result.width,
             height: result.height,
             timestamp: Date.now(),
+            transcodeFormat: transcodeConfig.format,
           });
         }
 
@@ -832,7 +833,7 @@ void getAlbedo() {
         let result: Ktx2TranscodeResult | null = null;
 
         if (this.config.enableCache && this.cacheManager) {
-          const cached = await this.cacheManager.loadMip(this.config.ktxUrl!, level);
+          const cached = await this.cacheManager.loadMip(this.config.ktxUrl!, level, transcodeConfig.format);
           if (cached) {
             this.log(this.LOG_VERBOSE, `[KTX2] Level ${level} loaded from cache (adaptive)`);
             result = {
@@ -865,6 +866,7 @@ void getAlbedo() {
               width: result.width,
               height: result.height,
               timestamp: Date.now(),
+              transcodeFormat: transcodeConfig.format,
             });
           }
         }
@@ -2265,7 +2267,26 @@ self.onmessage = async function(e) {
       // Upload the mipmap level using appropriate method
       if (isCompressed) {
         // For compressed textures, use compressedTexImage2D
-        this.log(this.LOG_VERBOSE, `[KTX2] Uploading compressed texture level ${level} (format=${internalFormat})`);
+        // BC7: each 4x4 block = 16 bytes
+        const expectedSize = Math.ceil(result.width / 4) * Math.ceil(result.height / 4) * 16;
+
+        this.log(this.LOG_VERBOSE,
+          `[KTX2] Uploading compressed texture level ${level} (format=${internalFormat})\n` +
+          `       Size: ${result.width}x${result.height}\n` +
+          `       Data: ${result.data.byteLength} bytes (expected: ${expectedSize} bytes)`
+        );
+
+        // Validate data size
+        if (result.data.byteLength !== expectedSize) {
+          this.logError(
+            `[KTX2] Data size mismatch for level ${level}!\n` +
+            `       Expected: ${expectedSize} bytes for ${result.width}x${result.height}\n` +
+            `       Got: ${result.data.byteLength} bytes\n` +
+            `       Difference: ${result.data.byteLength - expectedSize} bytes`
+          );
+          // Try to use the available data anyway
+        }
+
         gl.compressedTexImage2D(
           gl.TEXTURE_2D,
           level,
@@ -2293,6 +2314,10 @@ self.onmessage = async function(e) {
           result.data
         );
       }
+
+      // Flush GPU commands to ensure texture data is uploaded before changing BASE_LEVEL
+      // This fixes artifacts on mobile GPUs (Mali, Adreno) where race conditions can occur
+      gl.flush();
 
       // Update LOD range to show progressively better quality
       // We load from level 13 (1x1) down to level 0 (8192x8192)

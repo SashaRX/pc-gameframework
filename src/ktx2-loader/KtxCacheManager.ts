@@ -202,13 +202,14 @@ export class KtxCacheManager {
   /**
    * Load cached mip level
    */
-  async loadMip(url: string, level: number): Promise<CachedMip | null> {
+  async loadMip(url: string, level: number, transcodeFormat: number): Promise<CachedMip | null> {
     if (!this.db) {
       this.stats.misses++;
       return null;
     }
 
-    const id = `${url}#L${level}`;
+    // Include format in cache key to prevent format mismatches
+    const id = `${url}#L${level}#F${transcodeFormat}`;
 
     return new Promise((resolve, reject) => {
       const transaction = this.db!.transaction([this.STORE_NAME], 'readonly');
@@ -218,8 +219,15 @@ export class KtxCacheManager {
       request.onsuccess = () => {
         const result: CachedMip | undefined = request.result;
         if (result) {
-          this.stats.hits++;
-          resolve(result);
+          // Validate format matches (extra safety check)
+          if (result.transcodeFormat === transcodeFormat) {
+            this.stats.hits++;
+            resolve(result);
+          } else {
+            // Format mismatch - treat as cache miss
+            this.stats.misses++;
+            resolve(null);
+          }
         } else {
           this.stats.misses++;
           resolve(null);
@@ -240,11 +248,12 @@ export class KtxCacheManager {
     url: string,
     level: number,
     data: Uint8Array,
-    metadata: { width: number; height: number; timestamp: number }
+    metadata: { width: number; height: number; timestamp: number; transcodeFormat: number }
   ): Promise<void> {
     if (!this.db) return;
 
-    const id = `${url}#L${level}`;
+    // Include format in cache key to prevent format mismatches
+    const id = `${url}#L${level}#F${metadata.transcodeFormat}`;
     const item: CachedMip = {
       id,
       url,
@@ -253,7 +262,8 @@ export class KtxCacheManager {
       height: metadata.height,
       data,
       timestamp: metadata.timestamp,
-      version: '1.0',
+      version: '2.0', // Bumped to invalidate old RGBA cache entries
+      transcodeFormat: metadata.transcodeFormat,
     };
 
     return new Promise((resolve, reject) => {
@@ -295,10 +305,10 @@ export class KtxCacheManager {
   /**
    * Save full KTX2 file to cache
    */
-  async saveFullKtx(url: string, data: Uint8Array, metadata: { width: number; height: number; timestamp: number }): Promise<void> {
+  async saveFullKtx(url: string, data: Uint8Array, metadata: { width: number; height: number; timestamp: number; transcodeFormat: number }): Promise<void> {
     if (!this.db) return;
 
-    const id = `${url}#FULL`;
+    const id = `${url}#FULL#F${metadata.transcodeFormat}`;
     const item: CachedMip = {
       id,
       url,
@@ -307,7 +317,8 @@ export class KtxCacheManager {
       height: metadata.height,
       data,
       timestamp: metadata.timestamp,
-      version: '1.0',
+      version: '2.0', // Bumped to invalidate old cache entries
+      transcodeFormat: metadata.transcodeFormat,
     };
 
     return new Promise((resolve, reject) => {
@@ -327,13 +338,13 @@ export class KtxCacheManager {
   /**
    * Load full KTX2 file from cache
    */
-  async loadFullKtx(url: string): Promise<Uint8Array | null> {
+  async loadFullKtx(url: string, transcodeFormat: number): Promise<Uint8Array | null> {
     if (!this.db) {
       this.stats.misses++;
       return null;
     }
 
-    const id = `${url}#FULL`;
+    const id = `${url}#FULL#F${transcodeFormat}`;
 
     return new Promise((resolve, reject) => {
       const transaction = this.db!.transaction([this.STORE_NAME], 'readonly');
@@ -343,8 +354,15 @@ export class KtxCacheManager {
       request.onsuccess = () => {
         const result: CachedMip | undefined = request.result;
         if (result) {
-          this.stats.hits++;
-          resolve(result.data);
+          // Validate format matches
+          if (result.transcodeFormat === transcodeFormat) {
+            this.stats.hits++;
+            resolve(result.data);
+          } else {
+            // Format mismatch - treat as cache miss
+            this.stats.misses++;
+            resolve(null);
+          }
         } else {
           this.stats.misses++;
           resolve(null);
