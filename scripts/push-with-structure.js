@@ -15,9 +15,8 @@ const BUILD_DIR = 'build/esm';
 
 // Library files to push to PlayCanvas libs/ folder
 // Format: { src: local path, dest: PlayCanvas path }
+// NOTE: libktx.mjs/wasm загружаются с внешнего сервера, не пушим в PlayCanvas
 const LIB_FILES = [
-  { src: 'src/libs/libktx/libktx.mjs', dest: 'libs/libktx/libktx.mjs' },
-  { src: 'src/libs/libktx/libktx.wasm', dest: 'libs/libktx/libktx.wasm' },
   { src: 'src/libs/meshoptimizer/meshopt_decoder.mjs', dest: 'libs/meshoptimizer/meshopt_decoder.mjs' }
 ];
 
