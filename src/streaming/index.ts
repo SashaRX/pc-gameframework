@@ -36,3 +36,13 @@ export type { MemoryStats } from './MemoryTracker';
 
 // Priority queue types
 export type { PriorityItem } from './PriorityQueue';
+
+// Meshopt decoder (re-export for convenience)
+export {
+  MeshoptLoader,
+  MeshoptDecoder,
+  MeshoptMode,
+  MeshoptFilter,
+  MeshoptModeType,
+  MeshoptFilterType,
+} from '../meshopt-loader';

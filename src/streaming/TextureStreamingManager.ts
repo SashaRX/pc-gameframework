@@ -22,6 +22,7 @@ import { TextureRegistry } from './TextureRegistry';
 import { CategoryManager } from './CategoryManager';
 import { MemoryTracker } from './MemoryTracker';
 import { SimpleScheduler } from './SimpleScheduler';
+import { MeshoptLoader, MeshoptDecoder } from '../meshopt-loader';
 import type {
   TextureCategory,
   TextureRegistration,
@@ -58,6 +59,10 @@ export class TextureStreamingManager {
   private priorityUpdateTimer: number = 0;
   private isDestroyed: boolean = false;
 
+  // Meshopt decoder (optional, for EXT_meshopt_compression support)
+  private meshoptLoader: MeshoptLoader;
+  private meshoptInitPromise: Promise<MeshoptDecoder> | null = null;
+
   // Performance tracking
   private lastPriorityUpdate: number = 0;
   private totalRegistered: number = 0;
@@ -79,6 +84,9 @@ export class TextureStreamingManager {
       this.config.maxConcurrent,
       this.memoryTracker
     );
+
+    // Initialize MeshoptLoader singleton
+    this.meshoptLoader = MeshoptLoader.getInstance();
 
     if (this.config.debugLogging) {
       this.log('TextureStreamingManager initialized');
@@ -329,6 +337,89 @@ export class TextureStreamingManager {
 
     const result = handle.calculatePriority(context);
     return result.priority;
+  }
+
+  // ===========================================================================
+  // Meshopt Decoder (EXT_meshopt_compression support)
+  // ===========================================================================
+
+  /**
+   * Initialize meshopt decoder for EXT_meshopt_compression support
+   *
+   * Call this before loading GLB files with meshopt compression.
+   * The decoder is initialized automatically on first use, but calling
+   * this explicitly ensures it's ready when needed.
+   *
+   * @param meshoptUrl Optional URL override for meshopt_decoder.mjs
+   * @returns Promise resolving to MeshoptDecoder
+   */
+  async initializeMeshopt(meshoptUrl?: string): Promise<MeshoptDecoder> {
+    // Return cached promise if initialization is in progress
+    if (this.meshoptInitPromise) {
+      return this.meshoptInitPromise;
+    }
+
+    // Return cached decoder if already initialized
+    if (this.meshoptLoader.isInitialized()) {
+      return this.meshoptLoader.getDecoder()!;
+    }
+
+    const url = meshoptUrl ?? this.config.meshoptUrl;
+
+    if (this.config.debugLogging) {
+      this.log('Initializing meshopt decoder...');
+    }
+
+    const startTime = performance.now();
+    this.meshoptInitPromise = this.meshoptLoader.initialize(
+      this.app,
+      this.config.debugLogging,
+      url
+    );
+
+    try {
+      const decoder = await this.meshoptInitPromise;
+
+      if (this.config.debugLogging) {
+        const elapsed = performance.now() - startTime;
+        this.log(`Meshopt decoder initialized in ${elapsed.toFixed(1)}ms (SIMD: ${decoder.supported})`);
+      }
+
+      return decoder;
+    } catch (error) {
+      this.meshoptInitPromise = null;
+      throw error;
+    }
+  }
+
+  /**
+   * Get meshopt decoder (must be initialized first)
+   * @returns MeshoptDecoder or null if not initialized
+   */
+  getMeshoptDecoder(): MeshoptDecoder | null {
+    return this.meshoptLoader.getDecoder();
+  }
+
+  /**
+   * Check if meshopt decoder is initialized
+   */
+  isMeshoptInitialized(): boolean {
+    return this.meshoptLoader.isInitialized();
+  }
+
+  /**
+   * Initialize meshopt worker pool for async decoding
+   * @param workerCount Number of workers (default: navigator.hardwareConcurrency)
+   */
+  initializeMeshoptWorkers(workerCount?: number): void {
+    if (!this.meshoptLoader.isInitialized()) {
+      throw new Error('[TextureStreamingManager] Meshopt decoder not initialized. Call initializeMeshopt() first.');
+    }
+    this.meshoptLoader.useWorkers(workerCount);
+
+    if (this.config.debugLogging) {
+      this.log(`Meshopt workers initialized`);
+    }
   }
 
   // ===========================================================================

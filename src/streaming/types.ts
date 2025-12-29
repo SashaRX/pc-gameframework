@@ -80,6 +80,9 @@ export interface StreamingManagerConfig {
 
   /** URL to libktx.wasm binary (optional, overrides Asset Registry) */
   libktxWasmUrl?: string;
+
+  /** URL to meshopt_decoder.mjs module (optional, overrides Asset Registry) */
+  meshoptUrl?: string;
 }
 
 /**
