@@ -3,7 +3,7 @@
  */
 
 import type * as pc from 'playcanvas';
-import type { Ktx2LoaderConfig } from '../ktx2-loader/types';
+import type { Ktx2LoaderConfig } from '../../loaders/ktx2-types';
 
 // ============================================================================
 // Texture Categories

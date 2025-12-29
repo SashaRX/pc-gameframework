@@ -6,7 +6,7 @@
  */
 
 import type * as pc from 'playcanvas';
-import type { KtxModule } from './types';
+import type { KtxModule } from '../../loaders/ktx2-types';
 
 export class LibktxLoader {
   private static instance: LibktxLoader | null = null;

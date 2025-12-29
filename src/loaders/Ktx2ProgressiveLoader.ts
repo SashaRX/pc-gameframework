@@ -21,13 +21,13 @@ import type {
   MipLoadInfo,
   KtxModule,
   KtxApi,
-} from './types';
+} from './ktx2-types';
 import { KtxCacheManager } from './KtxCacheManager';
 import { MemoryPool } from './MemoryPool';
 import { GpuFormatDetector, TextureFormat } from './GpuFormatDetector';
 import { alignValue, readU64asNumber, writeU64 } from './utils/alignment';
 import { parseDFDColorSpace } from './utils/colorspace';
-import { LibktxLoader } from './LibktxLoader';
+import { LibktxLoader } from '../libs/libktx/LibktxLoader';
 
 export class Ktx2ProgressiveLoader {
   private app: pc.Application;

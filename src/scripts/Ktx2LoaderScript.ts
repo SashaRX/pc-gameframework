@@ -4,7 +4,7 @@
 
 import type * as pc from 'playcanvas';
 import * as pcRuntime from 'playcanvas';
-import { Ktx2ProgressiveLoader } from '../ktx2-loader/Ktx2ProgressiveLoader';
+import { Ktx2ProgressiveLoader } from '../loaders/Ktx2ProgressiveLoader';
 
 // Script class exists at runtime but not exported in types
 const Script = (pcRuntime as any).Script;

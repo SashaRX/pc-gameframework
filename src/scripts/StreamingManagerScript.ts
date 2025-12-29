@@ -6,7 +6,7 @@
 
 import type * as pc from 'playcanvas';
 import * as pcRuntime from 'playcanvas';
-import { TextureStreamingManager } from '../streaming/TextureStreamingManager';
+import { TextureStreamingManager } from '../systems/streaming/TextureStreamingManager';
 
 // Script class exists at runtime but not exported in types
 const Script = (pcRuntime as any).Script;

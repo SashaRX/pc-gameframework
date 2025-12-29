@@ -22,7 +22,7 @@ import { TextureRegistry } from './TextureRegistry';
 import { CategoryManager } from './CategoryManager';
 import { MemoryTracker } from './MemoryTracker';
 import { SimpleScheduler } from './SimpleScheduler';
-import { MeshoptLoader, MeshoptDecoder } from '../meshopt-loader';
+import { MeshoptLoader, MeshoptDecoder } from '../../libs/meshoptimizer';
 import type {
   TextureCategory,
   TextureRegistration,

@@ -45,4 +45,4 @@ export {
   MeshoptFilter,
   MeshoptModeType,
   MeshoptFilterType,
-} from '../meshopt-loader';
+} from '../../libs/meshoptimizer';

@@ -8,7 +8,7 @@
  * - Partial cache support
  */
 
-import type { CachedMip } from './types';
+import type { CachedMip } from './ktx2-types';
 
 export interface CacheStats {
   totalSize: number;      // Total cache size in bytes

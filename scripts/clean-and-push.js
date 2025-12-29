@@ -10,9 +10,15 @@
 const { execSync } = require('child_process');
 
 // Files to remove from PlayCanvas root (old locations that moved to subdirs)
-// Note: libktx.mjs, libktx.wasm, meshopt_decoder.mjs stay in root - don't remove!
 const OLD_FILES_TO_REMOVE = [
-  'Ktx2LoaderScript.mjs'  // Moved to scripts/Ktx2LoaderScript.mjs
+  'Ktx2LoaderScript.mjs',      // Moved to scripts/
+  'libktx.mjs',                // Moved to libs/libktx/
+  'libktx.wasm',               // Moved to libs/libktx/
+  'meshopt_decoder.mjs',       // Moved to libs/meshoptimizer/
+  // Old folder structure
+  'ktx2-loader',
+  'meshopt-loader',
+  'streaming'
 ];
 
 /**

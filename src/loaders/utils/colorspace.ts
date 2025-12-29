@@ -3,7 +3,7 @@
  * Based on KTX2 specification
  */
 
-import type { Ktx2ColorSpace } from '../types';
+import type { Ktx2ColorSpace } from '../ktx2-types';
 
 // Khronos Data Format constants
 const KHR_DF_TRANSFER_LINEAR = 1;
