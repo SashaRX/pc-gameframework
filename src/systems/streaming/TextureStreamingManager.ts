@@ -34,8 +34,9 @@ import type {
 
 /**
  * Default streaming manager configuration
+ * NOTE: libktxModuleUrl and libktxWasmUrl MUST be provided by user
  */
-const DEFAULT_CONFIG: StreamingManagerConfig = {
+const DEFAULT_CONFIG: Partial<StreamingManagerConfig> = {
   maxMemoryMB: 512,               // 512MB VRAM budget
   maxConcurrent: 4,                // 4 parallel loads
   priorityUpdateInterval: 0.5,     // 500ms debounce
@@ -68,9 +69,22 @@ export class TextureStreamingManager {
   private totalRegistered: number = 0;
   private totalUnregistered: number = 0;
 
-  constructor(app: pc.Application, config?: Partial<StreamingManagerConfig>) {
+  constructor(app: pc.Application, config: Partial<StreamingManagerConfig>) {
     this.app = app;
-    this.config = { ...DEFAULT_CONFIG, ...config };
+
+    // Validate required URLs
+    if (!config.libktxModuleUrl || !config.libktxWasmUrl) {
+      throw new Error(
+        '[TextureStreamingManager] libktxModuleUrl and libktxWasmUrl are REQUIRED!\n' +
+        'Example:\n' +
+        '  new TextureStreamingManager(app, {\n' +
+        '    libktxModuleUrl: "https://raw.githubusercontent.com/user/repo/main/libktx.mjs",\n' +
+        '    libktxWasmUrl: "https://raw.githubusercontent.com/user/repo/main/libktx.wasm"\n' +
+        '  })'
+      );
+    }
+
+    this.config = { ...DEFAULT_CONFIG, ...config } as StreamingManagerConfig;
 
     // Initialize subsystems in order
     this.registry = new TextureRegistry();

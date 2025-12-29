@@ -1,8 +1,8 @@
 /**
- * LibktxLoader - Singleton for loading libktx module in PlayCanvas
+ * LibktxLoader - Singleton for loading libktx module from external URLs
  *
- * Handles loading libktx.mjs and libktx.wasm from PlayCanvas Asset Registry
- * without using dynamic import() which fails in published builds.
+ * libktx.mjs and libktx.wasm MUST be hosted externally (e.g. GitHub, CDN)
+ * URLs are REQUIRED - no Asset Registry fallback.
  */
 
 import type * as pc from 'playcanvas';
@@ -27,20 +27,33 @@ export class LibktxLoader {
   }
 
   /**
-   * Initialize libktx module from external URLs or PlayCanvas Asset Registry
-   * @param app PlayCanvas application
+   * Initialize libktx module from external URLs
+   * @param app PlayCanvas application (unused, kept for API compatibility)
    * @param verbose Enable verbose logging
-   * @param libktxMjsUrl Optional external URL for libktx.mjs
-   * @param libktxWasmUrl Optional external URL for libktx.wasm
+   * @param libktxMjsUrl REQUIRED: External URL for libktx.mjs
+   * @param libktxWasmUrl REQUIRED: External URL for libktx.wasm
    * @returns Initialized KTX module
    */
   public async initialize(
     app: pc.Application,
     verbose = false,
-    libktxMjsUrl?: string,
-    libktxWasmUrl?: string
+    libktxMjsUrl: string,
+    libktxWasmUrl: string
   ): Promise<KtxModule> {
     this.verbose = verbose;
+
+    // Validate required URLs
+    if (!libktxMjsUrl || !libktxWasmUrl) {
+      throw new Error(
+        '[LibktxLoader] External URLs are REQUIRED!\n\n' +
+        'Please provide:\n' +
+        '  - libktxMjsUrl: URL to libktx.mjs\n' +
+        '  - libktxWasmUrl: URL to libktx.wasm\n\n' +
+        'Example:\n' +
+        '  libktxMjsUrl: "https://raw.githubusercontent.com/user/repo/main/libktx.mjs"\n' +
+        '  libktxWasmUrl: "https://raw.githubusercontent.com/user/repo/main/libktx.wasm"'
+      );
+    }
 
     // Return cached module if already initialized
     if (this.ktxModule) {
@@ -59,65 +72,31 @@ export class LibktxLoader {
     }
 
     // Start initialization
-    this.initPromise = this._initializeInternal(app, libktxMjsUrl, libktxWasmUrl);
+    this.initPromise = this._initializeInternal(libktxMjsUrl, libktxWasmUrl);
     return this.initPromise;
   }
 
   private async _initializeInternal(
-    app: pc.Application,
-    libktxMjsUrl?: string,
-    libktxWasmUrl?: string
+    mjsUrl: string,
+    wasmUrl: string
   ): Promise<KtxModule> {
     try {
       if (this.verbose) {
         console.log('[LibktxLoader] Starting initialization...');
-      }
-
-      let mjsUrl: string;
-      let wasmUrl: string;
-
-      // Step 1: Get URLs - use external URLs if provided, otherwise use Asset Registry
-      if (libktxMjsUrl && libktxWasmUrl) {
-        // Use external URLs
-        if (this.verbose) {
-          console.log('[LibktxLoader] Using external URLs');
-        }
-        mjsUrl = libktxMjsUrl;
-        wasmUrl = libktxWasmUrl;
-      } else {
-        // Find assets in PlayCanvas Asset Registry
-        const { mjsAsset, wasmAsset } = this._findAssets(app);
-
-        // Get asset URLs
-        const mjsUrlNullable = mjsAsset.getFileUrl();
-        const wasmUrlNullable = wasmAsset.getFileUrl();
-
-        if (!mjsUrlNullable || !wasmUrlNullable) {
-          throw new Error(
-            '[LibktxLoader] Asset URLs not available. Make sure assets are loaded and have valid URLs.'
-          );
-        }
-
-        mjsUrl = mjsUrlNullable;
-        wasmUrl = wasmUrlNullable;
-      }
-
-      if (this.verbose) {
-        console.log('[LibktxLoader] Asset URLs:');
         console.log('  - libktx.mjs:', mjsUrl);
         console.log('  - libktx.wasm:', wasmUrl);
       }
 
-      // Step 3: Load JS code as text (NOT via import)
+      // Step 1: Load JS code as text
       const jsCode = await this._loadJsAsText(mjsUrl);
 
-      // Step 4: Execute JS code to get factory function
+      // Step 2: Execute JS code to get factory function
       const factory = this._executeJsCode(jsCode, mjsUrl);
 
-      // Step 5: Load WASM binary
+      // Step 3: Load WASM binary
       const wasmBinary = await this._loadWasmBinary(wasmUrl);
 
-      // Step 6: Initialize WASM module
+      // Step 4: Initialize WASM module
       const module = await this._initializeWasmModule(factory, wasmBinary, wasmUrl);
 
       this.ktxModule = module;
@@ -135,80 +114,6 @@ export class LibktxLoader {
   }
 
   /**
-   * Find libktx assets in PlayCanvas Asset Registry
-   */
-  private _findAssets(app: pc.Application): {
-    mjsAsset: pc.Asset;
-    wasmAsset: pc.Asset;
-  } {
-    if (this.verbose) {
-      console.log('[LibktxLoader] Searching for libktx assets in Asset Registry...');
-    }
-
-    // Find libktx.mjs - MUST be uploaded as Binary type (NOT Script)
-    // In published builds, Script-type assets get inaccessible /js/esm-scripts/ URLs (403)
-    // Binary-type assets get accessible /files/assets/ URLs
-    let mjsAsset = app.assets.find('libktx.mjs', 'binary');
-    if (!mjsAsset) {
-      // Fallback: try script type (works in editor, fails in published builds)
-      mjsAsset = app.assets.find('libktx.mjs', 'script');
-    }
-
-    // Find libktx.wasm - search for both 'wasm' and 'binary' types
-    let wasmAsset = app.assets.find('libktx.wasm', 'wasm');
-    if (!wasmAsset) {
-      wasmAsset = app.assets.find('libktx.wasm', 'binary');
-    }
-
-    // Validate
-    if (!mjsAsset || !wasmAsset) {
-      const availableAssets = app.assets.list().map(a => ({
-        name: a.name,
-        type: a.type
-      }));
-
-      console.error('[LibktxLoader] Asset search failed:');
-      console.error('  - libktx.mjs found:', !!mjsAsset);
-      console.error('  - libktx.wasm found:', !!wasmAsset);
-      console.error('[LibktxLoader] Available assets:', availableAssets);
-
-      throw new Error(
-        `[LibktxLoader] Required assets not found in Asset Registry!\n\n` +
-        `Please ensure the following:\n` +
-        `1. Upload libktx.mjs to PlayCanvas Assets\n` +
-        `   - Import as type: Binary (NOT Script or ESM Module!)\n` +
-        `   - Why Binary? Script-type assets get 403 errors in published builds\n` +
-        `   - Enable Preload\n` +
-        `   - Name must be exactly: libktx.mjs\n\n` +
-        `2. Upload libktx.wasm to PlayCanvas Assets\n` +
-        `   - Import as type: Binary or WASM\n` +
-        `   - Enable Preload\n` +
-        `   - Name must be exactly: libktx.wasm\n\n` +
-        `Current status:\n` +
-        `  - libktx.mjs: ${mjsAsset ? ' Found' : ' Not found'}\n` +
-        `  - libktx.wasm: ${wasmAsset ? ' Found' : ' Not found'}`
-      );
-    }
-
-    if (this.verbose) {
-      console.log('[LibktxLoader] Assets found:');
-      console.log('  - libktx.mjs:', mjsAsset.name, `(type: ${mjsAsset.type})`);
-      console.log('  - libktx.wasm:', wasmAsset.name, `(type: ${wasmAsset.type})`);
-    }
-
-    // Warn if libktx.mjs is uploaded as script type (will fail in published builds)
-    if (mjsAsset.type === 'script') {
-      console.warn(
-        '[LibktxLoader] WARNING: libktx.mjs is uploaded as Script type.\n' +
-        'This will cause 403 errors in published builds!\n' +
-        'Please re-upload libktx.mjs as Binary type for production use.'
-      );
-    }
-
-    return { mjsAsset, wasmAsset };
-  }
-
-  /**
    * Load JavaScript code as text via fetch
    */
   private async _loadJsAsText(url: string): Promise<string> {
@@ -219,7 +124,8 @@ export class LibktxLoader {
     const response = await fetch(url);
     if (!response.ok) {
       throw new Error(
-        `[LibktxLoader] Failed to fetch libktx.mjs: ${response.status} ${response.statusText}`
+        `[LibktxLoader] Failed to fetch libktx.mjs: ${response.status} ${response.statusText}\n` +
+        `URL: ${url}`
       );
     }
 
@@ -234,8 +140,6 @@ export class LibktxLoader {
 
   /**
    * Execute JS code and extract the createKtxModule factory function
-   * libktx.mjs is NOT an ES module with export default
-   * It defines async function createKtxModule() {...} and var LIBKTX
    */
   private _executeJsCode(code: string, moduleUrl: string): (config?: any) => Promise<KtxModule> {
     if (this.verbose) {
@@ -243,40 +147,26 @@ export class LibktxLoader {
     }
 
     try {
-      // Step 1: Replace import.meta.url with actual URL
+      // Replace import.meta.url with actual URL
       let modifiedCode = code.replace(/import\.meta\.url/g, `"${moduleUrl}"`);
-
-      // Step 2: Replace import.meta (without .url) if it exists
       modifiedCode = modifiedCode.replace(/import\.meta/g, `{url: "${moduleUrl}"}`);
 
-      // Step 3: Remove any export statements (can cause SyntaxError in eval)
-      // Remove "export default", "export {", "export const", etc.
+      // Remove export statements
       modifiedCode = modifiedCode.replace(/\bexport\s+default\s+/g, '');
       modifiedCode = modifiedCode.replace(/\bexport\s+\{[^}]*\}/g, '');
       modifiedCode = modifiedCode.replace(/\bexport\s+(const|let|var|function|class)\s+/g, '$1 ');
 
-      if (this.verbose) {
-        console.log('[LibktxLoader] Code modified: removed import.meta and export statements');
-      }
-
-      // Step 4: Execute the code - it will define createKtxModule and LIBKTX in global/local scope
-      // Wrap in a function to create a local scope and return the factory
+      // Execute and return factory
       const wrappedCode = `
         (function() {
           ${modifiedCode}
-          // Return the factory function (createKtxModule or LIBKTX)
           return typeof LIBKTX !== 'undefined' ? LIBKTX : (typeof createKtxModule !== 'undefined' ? createKtxModule : null);
         })();
       `;
 
-      // Step 5: Execute and get the factory function
       const factory = (0, eval)(wrappedCode);
 
       if (!factory || typeof factory !== 'function') {
-        if (this.verbose) {
-          console.error('[LibktxLoader] Factory type:', typeof factory);
-          console.error('[LibktxLoader] Factory value:', factory);
-        }
         throw new Error('[LibktxLoader] Could not extract createKtxModule factory from libktx.mjs');
       }
 
@@ -287,10 +177,7 @@ export class LibktxLoader {
       return factory;
 
     } catch (error) {
-      console.error('[LibktxLoader] Failed to execute JS code:', error);
-      throw new Error(
-        `[LibktxLoader] Failed to execute libktx.mjs code. Error: ${error}`
-      );
+      throw new Error(`[LibktxLoader] Failed to execute libktx.mjs: ${error}`);
     }
   }
 
@@ -305,7 +192,8 @@ export class LibktxLoader {
     const response = await fetch(url);
     if (!response.ok) {
       throw new Error(
-        `[LibktxLoader] Failed to fetch libktx.wasm: ${response.status} ${response.statusText}`
+        `[LibktxLoader] Failed to fetch libktx.wasm: ${response.status} ${response.statusText}\n` +
+        `URL: ${url}`
       );
     }
 
@@ -331,11 +219,9 @@ export class LibktxLoader {
     }
 
     try {
-      // Initialize the module with WASM binary
       const module = await factory({
         wasmBinary: wasmBinary,
         locateFile: (path: string) => {
-          // Return the WASM URL if requested
           if (path.endsWith('.wasm')) {
             return wasmUrl;
           }
@@ -350,10 +236,8 @@ export class LibktxLoader {
       return module;
 
     } catch (error) {
-      console.error('[LibktxLoader] WASM initialization failed:', error);
       throw new Error(
-        `[LibktxLoader] Failed to initialize WASM module. ` +
-        `Make sure libktx.wasm is valid and compatible with libktx.mjs.`
+        `[LibktxLoader] Failed to initialize WASM module: ${error}`
       );
     }
   }

@@ -310,12 +310,18 @@ void getAlbedo() {
   /**
    * Initialize the loader (load libktx, setup worker, init cache)
    */
-  async initialize(libktxModuleUrl?: string, libktxWasmUrl?: string): Promise<void> {
+  async initialize(): Promise<void> {
     this.log(this.LOG_INFO, '[KTX2] Initializing loader...');
 
-    // Use URLs from config if not provided as parameters
-    const mjsUrl = libktxModuleUrl || this.config.libktxModuleUrl;
-    const wasmUrl = libktxWasmUrl || this.config.libktxWasmUrl;
+    // Validate required URLs
+    if (!this.config.libktxModuleUrl || !this.config.libktxWasmUrl) {
+      throw new Error(
+        '[KTX2] libktxModuleUrl and libktxWasmUrl are REQUIRED in config!\n' +
+        'Example:\n' +
+        '  libktxModuleUrl: "https://raw.githubusercontent.com/user/repo/main/libktx.mjs"\n' +
+        '  libktxWasmUrl: "https://raw.githubusercontent.com/user/repo/main/libktx.wasm"'
+      );
+    }
 
     // Initialize GPU format detector
     const gl = (this.app.graphicsDevice as any).gl as WebGL2RenderingContext | WebGLRenderingContext;
@@ -341,7 +347,7 @@ void getAlbedo() {
 
     // Initialize worker
     if (this.config.useWorker) {
-      const success = await this.initWorker(mjsUrl, wasmUrl);
+      const success = await this.initWorker();
       if (!success) {
         this.logWarn('[KTX2] Worker initialization failed, will use main thread');
       }
@@ -349,7 +355,7 @@ void getAlbedo() {
 
     // Fallback: initialize main thread module
     if (!this.config.useWorker || !this.workerReady) {
-      await this.initMainThreadModule(mjsUrl, wasmUrl);
+      await this.initMainThreadModule();
     }
 
     this.log(this.LOG_INFO, '[KTX2] Loader ready');
@@ -1114,35 +1120,16 @@ self.onmessage = async function(e) {
 `;
   }
 
-  private async initWorker(libktxModuleUrl?: string, libktxWasmUrl?: string): Promise<boolean> {
+  private async initWorker(): Promise<boolean> {
     this.log(this.LOG_INFO, '[KTX2] Initializing Web Worker...');
 
     try {
-      // Get URLs (external or Asset Registry)
-      const loader = LibktxLoader.getInstance();
-      let mjsUrl = libktxModuleUrl || this.config.libktxModuleUrl;
-      let wasmUrl = libktxWasmUrl || this.config.libktxWasmUrl;
+      // URLs are required
+      const mjsUrl = this.config.libktxModuleUrl;
+      const wasmUrl = this.config.libktxWasmUrl;
 
       if (!mjsUrl || !wasmUrl) {
-        // Fallback to Asset Registry
-        const mjsAsset = this.app.assets.find('libktx.mjs', 'binary') || this.app.assets.find('libktx.mjs', 'script');
-        const wasmAsset = this.app.assets.find('libktx.wasm', 'wasm') || this.app.assets.find('libktx.wasm', 'binary');
-
-        if (!mjsAsset || !wasmAsset) {
-          this.logWarn('[KTX2] Worker: libktx assets not found');
-          return false;
-        }
-
-        const mjsUrlNullable = mjsAsset.getFileUrl();
-        const wasmUrlNullable = wasmAsset.getFileUrl();
-
-        if (!mjsUrlNullable || !wasmUrlNullable) {
-          this.logWarn('[KTX2] Worker: Asset URLs not available');
-          return false;
-        }
-
-        mjsUrl = mjsUrlNullable;
-        wasmUrl = wasmUrlNullable;
+        throw new Error('[KTX2] libktxModuleUrl and libktxWasmUrl are REQUIRED');
       }
 
       // Load worker code as text (inline for now, can be external in future)
@@ -1239,51 +1226,26 @@ self.onmessage = async function(e) {
   /**
    * Initialize libktx module on main thread (fallback when worker is disabled)
    */
-  private async initMainThreadModule(libktxModuleUrl?: string, libktxWasmUrl?: string): Promise<void> {
+  private async initMainThreadModule(): Promise<void> {
     this.log(this.LOG_INFO, '[KTX2] Loading libktx module on main thread...');
 
     try {
-      // Check if module is already loaded in globalThis
-      if ((globalThis as any).__libktx_factory) {
-        this.log(this.LOG_VERBOSE, '[KTX2] Using pre-loaded libktx from globalThis');
-        const factory = (globalThis as any).__libktx_factory;
+      // URLs are required
+      const mjsUrl = this.config.libktxModuleUrl;
+      const wasmUrl = this.config.libktxWasmUrl;
 
-        // Load WASM binary
-        const wasmAsset = this.app.assets.find('libktx.wasm', 'wasm') || this.app.assets.find('libktx.wasm', 'binary');
-        if (!wasmAsset) {
-          throw new Error('libktx.wasm asset not found');
-        }
-
-        const wasmUrl = wasmAsset.getFileUrl();
-        if (!wasmUrl) {
-          throw new Error('libktx.wasm URL not available');
-        }
-
-        const wasmResponse = await fetch(wasmUrl);
-        const wasmBinary = await wasmResponse.arrayBuffer();
-
-        // Initialize module
-        this.ktxModule = await factory({
-          wasmBinary: wasmBinary,
-          locateFile: (path: string) => {
-            if (path.endsWith('.wasm')) {
-              return wasmUrl;
-            }
-            return path;
-          }
-        });
-
-      } else {
-        // Fallback: use LibktxLoader
-        this.log(this.LOG_INFO, '[KTX2] Loading libktx via LibktxLoader (fallback)...');
-        const loader = LibktxLoader.getInstance();
-        this.ktxModule = await loader.initialize(
-          this.app,
-          this.config.logLevel >= this.LOG_VERBOSE,
-          libktxModuleUrl,
-          libktxWasmUrl
-        );
+      if (!mjsUrl || !wasmUrl) {
+        throw new Error('[KTX2] libktxModuleUrl and libktxWasmUrl are REQUIRED');
       }
+
+      // Use LibktxLoader
+      const loader = LibktxLoader.getInstance();
+      this.ktxModule = await loader.initialize(
+        this.app,
+        this.config.logLevel >= this.LOG_VERBOSE,
+        mjsUrl,
+        wasmUrl
+      );
 
       if (!this.ktxModule) {
         throw new Error('Failed to load KTX module');

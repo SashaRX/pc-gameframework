@@ -75,11 +75,11 @@ export interface StreamingManagerConfig {
   /** Log priority changes */
   logPriorityChanges: boolean;
 
-  /** URL to libktx.mjs module (optional, overrides Asset Registry) */
-  libktxModuleUrl?: string;
+  /** REQUIRED: URL to libktx.mjs module */
+  libktxModuleUrl: string;
 
-  /** URL to libktx.wasm binary (optional, overrides Asset Registry) */
-  libktxWasmUrl?: string;
+  /** REQUIRED: URL to libktx.wasm binary */
+  libktxWasmUrl: string;
 
   /** URL to meshopt_decoder.mjs module (optional, overrides Asset Registry) */
   meshoptUrl?: string;

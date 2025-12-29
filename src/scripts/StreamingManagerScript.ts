@@ -81,6 +81,13 @@ export class StreamingManagerScript extends Script {
   async initialize() {
     console.log('[StreamingManager] Initializing...');
 
+    // Validate required URLs
+    if (!this.libktxModuleUrl || !this.libktxWasmUrl) {
+      console.error('[StreamingManager] ERROR: libktxModuleUrl and libktxWasmUrl are REQUIRED!');
+      console.error('Please set these attributes in PlayCanvas Inspector');
+      return;
+    }
+
     try {
       // Create streaming manager
       this.streamingManager = new TextureStreamingManager(this.app as any, {
@@ -90,8 +97,8 @@ export class StreamingManagerScript extends Script {
         distanceWeight: this.distanceWeight,
         debugLogging: this.debugLogging,
         logPriorityChanges: this.logPriorityChanges,
-        libktxModuleUrl: this.libktxModuleUrl || undefined,
-        libktxWasmUrl: this.libktxWasmUrl || undefined,
+        libktxModuleUrl: this.libktxModuleUrl,
+        libktxWasmUrl: this.libktxWasmUrl,
       });
 
       // Apply quality preset

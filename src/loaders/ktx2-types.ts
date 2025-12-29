@@ -12,11 +12,11 @@ export interface Ktx2LoaderConfig {
   /** URL to the KTX2 file */
   ktxUrl: string;
 
-  /** External URL for libktx.mjs (optional, overrides Asset Registry) */
-  libktxModuleUrl?: string;
+  /** REQUIRED: External URL for libktx.mjs */
+  libktxModuleUrl: string;
 
-  /** External URL for libktx.wasm (optional, overrides Asset Registry) */
-  libktxWasmUrl?: string;
+  /** REQUIRED: External URL for libktx.wasm */
+  libktxWasmUrl: string;
 
   /** Enable progressive loading (load mips sequentially) */
   progressive?: boolean;

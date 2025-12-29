@@ -144,12 +144,19 @@ export class Ktx2LoaderScript extends Script {
   async initialize() {
     console.log('[KTX2] Script initializing...');
 
+    // Validate required URLs
+    if (!this.libktxMjsUrl || !this.libktxWasmUrl) {
+      console.error('[KTX2] ERROR: libktxMjsUrl and libktxWasmUrl are REQUIRED!');
+      console.error('Please set these attributes in PlayCanvas Inspector');
+      return;
+    }
+
     try {
       // Создаём loader с внешними URL для libktx файлов
       this.loader = new Ktx2ProgressiveLoader(this.app as any, {
         ktxUrl: this.ktxUrl,
-        libktxModuleUrl: this.libktxMjsUrl || undefined,
-        libktxWasmUrl: this.libktxWasmUrl || undefined,
+        libktxModuleUrl: this.libktxMjsUrl,
+        libktxWasmUrl: this.libktxWasmUrl,
         progressive: this.progressive,
         isSrgb: this.isSrgb,
         verbose: this.verbose,
