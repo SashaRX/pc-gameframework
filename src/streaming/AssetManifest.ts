@@ -6,9 +6,7 @@
 
 import {
   AssetManifestData,
-  ModelEntry,
-  MaterialEntry,
-  TextureEntry,
+  AssetEntry,
 } from './types';
 
 export class AssetManifest {
@@ -72,12 +70,20 @@ export class AssetManifest {
       this.version = this.manifest.version || '';
       this.loaded = true;
 
+      // Count by type
+      const assets = this.manifest.assets || {};
+      const counts = { model: 0, material: 0, texture: 0 };
+      for (const entry of Object.values(assets)) {
+        counts[entry.type]++;
+      }
+
       console.log('[AssetManifest] Loaded:', {
         baseUrl: this.baseUrl,
         version: this.version,
-        models: Object.keys(this.manifest.models || {}).length,
-        materials: Object.keys(this.manifest.materials || {}).length,
-        textures: Object.keys(this.manifest.textures || {}).length,
+        totalAssets: Object.keys(assets).length,
+        models: counts.model,
+        materials: counts.material,
+        textures: counts.texture,
       });
     } catch (error) {
       console.error('[AssetManifest] Failed to load:', error);
@@ -100,139 +106,110 @@ export class AssetManifest {
   }
 
   // ============================================================================
-  // Model Methods
+  // Asset Methods (by PlayCanvas Asset ID)
   // ============================================================================
 
   /**
-   * Get model entry by ID
+   * Get asset entry by PlayCanvas Asset ID
    */
-  getModel(id: string): ModelEntry | null {
-    return this.manifest?.models?.[id] || null;
+  getAsset(id: string): AssetEntry | null {
+    return this.manifest?.assets?.[id] || null;
   }
 
   /**
-   * Get full URL for model
+   * Get full URL for asset
+   */
+  getAssetUrl(id: string): string | null {
+    const entry = this.getAsset(id);
+    if (!entry) return null;
+    return `${this.baseUrl}/${entry.file}`;
+  }
+
+  /**
+   * Get asset type
+   */
+  getAssetType(id: string): 'model' | 'material' | 'texture' | null {
+    const entry = this.getAsset(id);
+    return entry?.type || null;
+  }
+
+  /**
+   * Check if asset exists in manifest
+   */
+  hasAsset(id: string): boolean {
+    return !!this.manifest?.assets?.[id];
+  }
+
+  /**
+   * Get all asset IDs
+   */
+  getAllAssetIds(): string[] {
+    return Object.keys(this.manifest?.assets || {});
+  }
+
+  /**
+   * Get assets by type
+   */
+  getAssetsByType(type: 'model' | 'material' | 'texture'): string[] {
+    const assets = this.manifest?.assets || {};
+    return Object.entries(assets)
+      .filter(([_, entry]) => entry.type === type)
+      .map(([id]) => id);
+  }
+
+  // ============================================================================
+  // Convenience Methods
+  // ============================================================================
+
+  /**
+   * Get model URL (alias)
    */
   getModelUrl(id: string): string | null {
-    const entry = this.getModel(id);
-    if (!entry) return null;
+    const entry = this.getAsset(id);
+    if (!entry || entry.type !== 'model') return null;
     return `${this.baseUrl}/${entry.file}`;
   }
 
   /**
-   * Check if model exists in manifest
-   */
-  hasModel(id: string): boolean {
-    return !!this.manifest?.models?.[id];
-  }
-
-  /**
-   * Get all model IDs
-   */
-  getAllModelIds(): string[] {
-    return Object.keys(this.manifest?.models || {});
-  }
-
-  // ============================================================================
-  // Material Methods
-  // ============================================================================
-
-  /**
-   * Get material entry by ID
-   */
-  getMaterial(id: string): MaterialEntry | null {
-    return this.manifest?.materials?.[id] || null;
-  }
-
-  /**
-   * Get full URL for material instance JSON
+   * Get material URL (alias)
    */
   getMaterialUrl(id: string): string | null {
-    const entry = this.getMaterial(id);
-    if (!entry) return null;
+    const entry = this.getAsset(id);
+    if (!entry || entry.type !== 'material') return null;
     return `${this.baseUrl}/${entry.file}`;
   }
 
   /**
-   * Get master material name for material instance
-   */
-  getMasterMaterial(id: string): string | null {
-    const entry = this.getMaterial(id);
-    return entry?.master || null;
-  }
-
-  /**
-   * Check if material exists in manifest
-   */
-  hasMaterial(id: string): boolean {
-    return !!this.manifest?.materials?.[id];
-  }
-
-  /**
-   * Get all material IDs
-   */
-  getAllMaterialIds(): string[] {
-    return Object.keys(this.manifest?.materials || {});
-  }
-
-  // ============================================================================
-  // Texture Methods
-  // ============================================================================
-
-  /**
-   * Get texture entry by ID
-   */
-  getTexture(id: string): TextureEntry | null {
-    return this.manifest?.textures?.[id] || null;
-  }
-
-  /**
-   * Get full URL for texture
+   * Get texture URL (alias)
    */
   getTextureUrl(id: string): string | null {
-    const entry = this.getTexture(id);
-    if (!entry) return null;
+    const entry = this.getAsset(id);
+    if (!entry || entry.type !== 'texture') return null;
     return `${this.baseUrl}/${entry.file}`;
+  }
+
+  /**
+   * Get master material name (for material assets)
+   */
+  getMasterMaterial(id: string): string | null {
+    const entry = this.getAsset(id);
+    return entry?.master || null;
   }
 
   /**
    * Get texture category
    */
   getTextureCategory(id: string): 'hero' | 'environment' | 'detail' {
-    const entry = this.getTexture(id);
+    const entry = this.getAsset(id);
     return entry?.category || 'environment';
   }
 
   /**
-   * Get texture file size (for memory budgeting)
+   * Get asset file size
    */
-  getTextureSize(id: string): number {
-    const entry = this.getTexture(id);
+  getAssetSize(id: string): number {
+    const entry = this.getAsset(id);
     return entry?.size || 0;
-  }
-
-  /**
-   * Check if texture exists in manifest
-   */
-  hasTexture(id: string): boolean {
-    return !!this.manifest?.textures?.[id];
-  }
-
-  /**
-   * Get all texture IDs
-   */
-  getAllTextureIds(): string[] {
-    return Object.keys(this.manifest?.textures || {});
-  }
-
-  /**
-   * Get textures by category
-   */
-  getTexturesByCategory(category: 'hero' | 'environment' | 'detail'): string[] {
-    const textures = this.manifest?.textures || {};
-    return Object.entries(textures)
-      .filter(([_, entry]) => (entry.category || 'environment') === category)
-      .map(([id]) => id);
   }
 
   // ============================================================================
@@ -240,37 +217,29 @@ export class AssetManifest {
   // ============================================================================
 
   /**
-   * Resolve any asset URL by type and ID
-   */
-  resolveUrl(type: 'model' | 'material' | 'texture', id: string): string | null {
-    switch (type) {
-      case 'model':
-        return this.getModelUrl(id);
-      case 'material':
-        return this.getMaterialUrl(id);
-      case 'texture':
-        return this.getTextureUrl(id);
-      default:
-        return null;
-    }
-  }
-
-  /**
    * Get total estimated size of assets
    */
-  getTotalSize(): { models: number; textures: number; total: number } {
+  getTotalSize(): { models: number; materials: number; textures: number; total: number } {
     let models = 0;
+    let materials = 0;
     let textures = 0;
 
-    for (const entry of Object.values(this.manifest?.models || {})) {
-      models += entry.size || 0;
+    for (const entry of Object.values(this.manifest?.assets || {})) {
+      const size = entry.size || 0;
+      switch (entry.type) {
+        case 'model':
+          models += size;
+          break;
+        case 'material':
+          materials += size;
+          break;
+        case 'texture':
+          textures += size;
+          break;
+      }
     }
 
-    for (const entry of Object.values(this.manifest?.textures || {})) {
-      textures += entry.size || 0;
-    }
-
-    return { models, textures, total: models + textures };
+    return { models, materials, textures, total: models + materials + textures };
   }
 
   /**

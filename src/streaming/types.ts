@@ -38,12 +38,24 @@ export interface AssetManifestData {
   baseUrl: string;
   /** Version for cache invalidation */
   version?: string;
-  /** Model registry */
-  models: Record<string, ModelEntry>;
-  /** Material instance registry */
-  materials: Record<string, MaterialEntry>;
-  /** Texture registry */
-  textures: Record<string, TextureEntry>;
+  /**
+   * Assets by PlayCanvas Asset Registry ID
+   * Key is the asset ID as string (e.g., "12345678")
+   */
+  assets: Record<string, AssetEntry>;
+}
+
+export interface AssetEntry {
+  /** Asset type */
+  type: 'model' | 'material' | 'texture';
+  /** Relative path to file */
+  file: string;
+  /** File size in bytes (for preload estimation) */
+  size?: number;
+  /** For materials: master material name */
+  master?: string;
+  /** For textures: category for priority */
+  category?: 'hero' | 'environment' | 'detail';
 }
 
 // ============================================================================

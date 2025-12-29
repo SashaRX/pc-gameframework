@@ -156,7 +156,7 @@ export class StreamingManager {
   }
 
   /**
-   * Scan entity hierarchy for asset references
+   * Scan entity hierarchy for asset references (by PlayCanvas asset IDs)
    */
   private scanEntityHierarchy(root: pc.Entity): EntityAssetRefs[] {
     const refs: EntityAssetRefs[] = [];
@@ -174,21 +174,39 @@ export class StreamingManager {
           textureIds: [],
         };
 
-        // Get model reference (from entity tags or custom data)
-        const modelTag = entity.tags.has('model:')
-          ? entity.tags.list().find((t) => t.startsWith('model:'))
-          : null;
-        if (modelTag) {
-          ref.modelId = modelTag.replace('model:', '');
+        // Get model/render asset ID
+        const modelAssetId = (render as any).asset;
+        if (modelAssetId) {
+          ref.modelId = String(modelAssetId);
         }
 
-        // Get material references
-        const materialTags = entity.tags.list().filter((t) => t.startsWith('material:'));
-        ref.materialIds = materialTags.map((t) => t.replace('material:', ''));
+        // Get material asset IDs
+        const materialAssetIds = (render as any).materialAssets as number[] | undefined;
+        if (materialAssetIds && materialAssetIds.length > 0) {
+          ref.materialIds = materialAssetIds.map(id => String(id));
+        }
 
-        // Get direct texture references
-        const textureTags = entity.tags.list().filter((t) => t.startsWith('texture:'));
-        ref.textureIds = textureTags.map((t) => t.replace('texture:', ''));
+        // Get texture IDs from materials
+        const meshInstances = render.meshInstances || [];
+        for (const mi of meshInstances) {
+          const mat = mi.material as pc.StandardMaterial;
+          if (!mat) continue;
+
+          // Check texture slots
+          for (const slot of ['diffuseMap', 'normalMap', 'aoMap', 'glossMap', 'metalnessMap', 'emissiveMap', 'opacityMap', 'heightMap']) {
+            const texture = (mat as any)[slot] as pc.Texture | undefined;
+            if (texture) {
+              // Find asset by resource
+              const textureAsset = this.app.assets.filter((a: pc.Asset) => a.resource === texture)[0];
+              if (textureAsset) {
+                ref.textureIds.push(String(textureAsset.id));
+              }
+            }
+          }
+        }
+
+        // Remove duplicates
+        ref.textureIds = [...new Set(ref.textureIds)];
 
         refs.push(ref);
       }
