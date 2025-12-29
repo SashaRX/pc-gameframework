@@ -12,6 +12,14 @@ const fs = require('fs');
 const path = require('path');
 
 const BUILD_DIR = 'build/esm';
+const LIB_DIR = 'lib';
+
+// Library files to push separately (relative to LIB_DIR)
+const LIB_FILES = [
+  'libktx.mjs',
+  'libktx.wasm',
+  'meshoptimizer/meshopt_decoder.mjs'
+];
 
 /**
  * Recursively find all files in a directory
@@ -38,13 +46,21 @@ function getAllFiles(dir, baseDir = dir) {
 
 /**
  * Push a single file to PlayCanvas
+ * @param {string} filePath - Path relative to PLAYCANVAS_TARGET_SUBDIR
+ * @param {string} localDir - Local directory containing the file
  */
-function pushFile(filePath) {
+function pushFile(filePath, localDir = BUILD_DIR) {
   console.log(`📤 Pushing: ${filePath}`);
 
   try {
     // Use forward slashes for PlayCanvas paths
     const pcPath = filePath.replace(/\\/g, '/');
+    const localPath = path.join(localDir, filePath);
+
+    // Check file exists
+    if (!fs.existsSync(localPath)) {
+      throw new Error(`File not found: ${localPath}`);
+    }
 
     execSync(`node node_modules/playcanvas-sync/bin/pcsync.js push "${pcPath}"`, {
       cwd: process.cwd(),
@@ -56,6 +72,58 @@ function pushFile(filePath) {
     console.error(`❌ Failed to push ${filePath}:`, error.message);
     throw error;
   }
+}
+
+/**
+ * Push lib files (libktx, meshopt) to PlayCanvas root
+ */
+function pushLibFiles() {
+  console.log('\n📚 Pushing library files...\n');
+
+  let successCount = 0;
+  let failCount = 0;
+
+  for (const file of LIB_FILES) {
+    const localPath = path.join(LIB_DIR, file);
+    // Push to PlayCanvas root (not in subdirectory)
+    const pcPath = path.basename(file); // Just filename for root
+
+    console.log(`📤 Pushing lib: ${file} -> ${pcPath}`);
+
+    try {
+      if (!fs.existsSync(localPath)) {
+        console.log(`⚠️  Skipping ${file} (not found)`);
+        continue;
+      }
+
+      // For lib files, we need to push directly with the source path
+      execSync(`node node_modules/playcanvas-sync/bin/pcsync.js push "${localPath}" --target "${pcPath}"`, {
+        cwd: process.cwd(),
+        stdio: 'inherit'
+      });
+
+      console.log(`✅ Pushed: ${pcPath}\n`);
+      successCount++;
+    } catch (error) {
+      // Try alternative approach - copy to build dir temporarily
+      console.log(`⚠️  Trying alternative push for ${file}...`);
+      try {
+        const tempPath = path.join(BUILD_DIR, pcPath);
+        fs.copyFileSync(localPath, tempPath);
+        execSync(`node node_modules/playcanvas-sync/bin/pcsync.js push "${pcPath}"`, {
+          cwd: process.cwd(),
+          stdio: 'inherit'
+        });
+        console.log(`✅ Pushed: ${pcPath}\n`);
+        successCount++;
+      } catch (err) {
+        console.error(`❌ Failed to push ${file}`);
+        failCount++;
+      }
+    }
+  }
+
+  return { successCount, failCount };
 }
 
 /**
@@ -94,6 +162,11 @@ function main() {
       failCount++;
     }
   }
+
+  // Push library files (libktx, meshopt)
+  const libResult = pushLibFiles();
+  successCount += libResult.successCount;
+  failCount += libResult.failCount;
 
   console.log('\n' + '='.repeat(50));
   console.log(`✅ Successfully pushed: ${successCount} files`);
