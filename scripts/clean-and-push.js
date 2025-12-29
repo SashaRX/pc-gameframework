@@ -19,9 +19,7 @@ const OLD_FILES_TO_REMOVE = [
   // Old folder structure
   'ktx2-loader',
   'meshopt-loader',
-  'streaming',
-  // libktx загружается с внешнего сервера - удаляем из PlayCanvas
-  'libs/libktx'
+  'streaming'
 ];
 
 /**

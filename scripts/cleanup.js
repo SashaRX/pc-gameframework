@@ -45,6 +45,8 @@ const ORPHANS_TO_REMOVE = [
   // Old/orphaned files in src
   'src/scripts/Ktx2LoaderScriptESM.mjs',
   'src/libs/libktx/libktx-wrapper.mjs',
+  'src/libs/libktx/libktx.mjs',   // загружается с внешнего сервера
+  'src/libs/libktx/libktx.wasm',  // загружается с внешнего сервера
 
   // Old documentation (excessive, keep only README.md)
   'BUILD_LIBKTX_GUIDE.md',
