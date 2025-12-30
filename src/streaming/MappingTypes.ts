@@ -1,20 +1,30 @@
 /**
  * Mapping Types - Structure of mapping.json from PlaycanvasAssetProcessor
+ *
+ * See docs/MAPPING_SPEC.md for full specification
  */
+
+import type * as pc from 'playcanvas';
 
 // ============================================================================
 // Mapping JSON Root
 // ============================================================================
 
 export interface AssetMapping {
+  /** Schema version */
+  version: string;
+  /** Generation timestamp */
+  generated?: string;
   /** Base URL for all assets (B2 server) */
   baseUrl: string;
-  /** Version for cache invalidation */
-  version?: string;
+  /** Master materials: name -> asset ID */
+  masterMaterials?: Record<string, number>;
   /** Model mappings by original PlayCanvas asset ID */
   models: Record<string, ModelMapping>;
-  /** Material mappings by original PlayCanvas asset ID */
-  materials: Record<string, string>; // ID -> path to instance JSON
+  /** Material mappings: asset ID -> path to instance JSON */
+  materials: Record<string, string>;
+  /** Texture mappings: asset ID or string key -> path or PackedTextureEntry */
+  textures: Record<string | number, string | PackedTextureEntry>;
 }
 
 // ============================================================================
@@ -24,6 +34,8 @@ export interface AssetMapping {
 export interface ModelMapping {
   /** Original asset name */
   name: string;
+  /** Path in editor hierarchy */
+  path: string;
   /** Material IDs used by this model (original PlayCanvas IDs) */
   materials: number[];
   /** LOD configurations */
@@ -31,10 +43,28 @@ export interface ModelMapping {
 }
 
 export interface LodConfig {
-  /** Path to GLB file on server */
-  path: string;
-  /** Max distance for this LOD (null = infinite, load first) */
-  maxDistance: number | null;
+  /** LOD level (0 = highest detail) */
+  level: number;
+  /** Path to GLB file relative to baseUrl */
+  file: string;
+  /** Switch distance (0 = closest) */
+  distance: number;
+}
+
+// ============================================================================
+// Texture Entries
+// ============================================================================
+
+/** Packed texture entry with source asset IDs */
+export interface PackedTextureEntry {
+  /** Path to KTX2 file */
+  file: string;
+  /** Original asset IDs that were packed [ao, gloss, metalness, height?] */
+  sources: number[];
+}
+
+export function isPackedTextureEntry(entry: string | PackedTextureEntry): entry is PackedTextureEntry {
+  return typeof entry === 'object' && 'file' in entry && 'sources' in entry;
 }
 
 // ============================================================================
@@ -42,50 +72,24 @@ export interface LodConfig {
 // ============================================================================
 
 export interface MaterialInstanceJson {
-  /** Master material name in PlayCanvas */
+  /** Master material name */
   master: string;
   /** Scalar/color parameters */
   params?: MaterialParams;
-  /** Texture assignments */
-  textures?: Record<string, TextureRef | PackedTextureRef>;
+  /** Texture assignments: slot -> asset ID (number) or packed key (string) */
+  textures?: Record<string, number | string>;
 }
 
 export interface MaterialParams {
   diffuse?: [number, number, number];
   specular?: [number, number, number];
   emissive?: [number, number, number];
+  emissiveIntensity?: number;
   metalness?: number;
-  glossiness?: number;
+  gloss?: number;
   opacity?: number;
   bumpiness?: number;
   [key: string]: any;
-}
-
-/** Simple texture reference */
-export type TextureRef = string;
-
-/** Packed texture with channel mapping (e.g., ORM) */
-export interface PackedTextureRef {
-  path: string;
-  /** Channel mappings - which channel contains what */
-  ao?: 'r' | 'g' | 'b' | 'a';
-  roughness?: 'r' | 'g' | 'b' | 'a';
-  metalness?: 'r' | 'g' | 'b' | 'a';
-  occlusion?: 'r' | 'g' | 'b' | 'a';
-  gloss?: 'r' | 'g' | 'b' | 'a';
-  height?: 'r' | 'g' | 'b' | 'a';
-}
-
-// ============================================================================
-// Type Guards
-// ============================================================================
-
-export function isPackedTextureRef(ref: TextureRef | PackedTextureRef): ref is PackedTextureRef {
-  return typeof ref === 'object' && 'path' in ref;
-}
-
-export function isSimpleTextureRef(ref: TextureRef | PackedTextureRef): ref is TextureRef {
-  return typeof ref === 'string';
 }
 
 // ============================================================================
@@ -95,6 +99,7 @@ export function isSimpleTextureRef(ref: TextureRef | PackedTextureRef): ref is T
 export interface LoadedModel {
   id: string;
   name: string;
+  path: string;
   materialIds: number[];
   lods: LoadedLod[];
   currentLodIndex: number;
@@ -102,7 +107,7 @@ export interface LoadedModel {
 }
 
 export interface LoadedLod {
-  index: number;
+  level: number;
   config: LodConfig;
   asset: pc.Asset | null;
   loaded: boolean;
@@ -113,9 +118,22 @@ export interface LoadedMaterialInstance {
   id: string;
   material: pc.StandardMaterial;
   masterName: string;
-  texturePaths: Map<string, string | PackedTextureRef>;
+  /** Texture slots: slot name -> asset ID or packed key */
+  textureRefs: Map<string, number | string>;
   texturesLoaded: boolean;
 }
 
-// pc types
-import type * as pc from 'playcanvas';
+// ============================================================================
+// Utility Types
+// ============================================================================
+
+/** Texture reference - either asset ID (number) or packed texture key (string) */
+export type TextureRef = number | string;
+
+export function isPackedTextureKey(ref: TextureRef): ref is string {
+  return typeof ref === 'string';
+}
+
+export function isAssetId(ref: TextureRef): ref is number {
+  return typeof ref === 'number';
+}

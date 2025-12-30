@@ -14,8 +14,7 @@
  * - Templates with excluded assets (asset IDs need registration)
  *
  * Entry point: ProcessedAssetManager
- * Components: MappingLoader, AssetRegistrar, MaterialInstanceLoader,
- *             OrmTextureHandler, LodManager
+ * Components: MappingLoader, AssetRegistrar, MaterialInstanceLoader, LodManager
  *
  * ============================================================================
  * LEGACY SYSTEM (Deprecated) - StreamingManager
@@ -44,9 +43,8 @@ export type { ProcessedAssetManagerConfig } from './ProcessedAssetManager';
 export { MappingLoader } from './MappingLoader';
 export { AssetRegistrar } from './AssetRegistrar';
 
-// Material & texture handling
+// Material handling
 export { MaterialInstanceLoader } from './MaterialInstanceLoader';
-export { OrmTextureHandler } from './OrmTextureHandler';
 
 // LOD management
 export { LodManager } from './LodManager';

@@ -188,7 +188,7 @@ export class LodManager {
     lodState.loading = true;
 
     try {
-      const url = this.mapping.getLodUrl(lodState.config);
+      const url = this.mapping.getLodUrlFromConfig(lodState.config);
       this.log(`Loading LOD ${lodIndex} for ${tracked.assetId}: ${url}`);
 
       // Check cache
@@ -199,7 +199,7 @@ export class LodManager {
       if (cached && cached.data instanceof ArrayBuffer) {
         arrayBuffer = cached.data;
       } else {
-        const response = await fetch(url);
+        const response = await fetch(url!);
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
@@ -350,13 +350,16 @@ export class LodManager {
     const adjustedDistance =
       distance + (tracked.currentLodIndex >= 0 ? hysteresis : 0);
 
-    for (let i = 0; i < lods.length; i++) {
-      const maxDist = lods[i].config.maxDistance;
-      if (maxDist !== null && adjustedDistance < maxDist) {
+    // LODs are sorted by distance ascending
+    // Find first LOD where camera distance < next LOD's distance threshold
+    for (let i = 0; i < lods.length - 1; i++) {
+      const nextLodDistance = lods[i + 1].config.distance;
+      if (adjustedDistance < nextLodDistance) {
         return i;
       }
     }
 
+    // Return last LOD (highest distance)
     return lods.length - 1;
   }
 

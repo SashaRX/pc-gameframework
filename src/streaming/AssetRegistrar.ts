@@ -126,7 +126,7 @@ export class AssetRegistrar {
     }
 
     // Create asset with original ID
-    const url = this.mapping.getLodUrl(initialLod);
+    const url = this.mapping.getLodUrlFromConfig(initialLod);
     const asset = this.createAssetWithId(
       numericId,
       modelMapping.name,

@@ -3,12 +3,16 @@
  *
  * Singleton that loads mapping from B2 server and provides
  * lookup methods for models, materials, textures.
+ *
+ * See docs/MAPPING_SPEC.md for mapping.json structure
  */
 
 import {
   AssetMapping,
   ModelMapping,
   LodConfig,
+  PackedTextureEntry,
+  isPackedTextureEntry,
 } from './MappingTypes';
 
 export class MappingLoader {
@@ -69,11 +73,17 @@ export class MappingLoader {
     this.baseUrl = this.mapping.baseUrl.replace(/\/$/, '');
     this.loaded = true;
 
+    const textureCount = this.mapping.textures ? Object.keys(this.mapping.textures).length : 0;
+    const masterCount = this.mapping.masterMaterials ? Object.keys(this.mapping.masterMaterials).length : 0;
+
     console.log('[MappingLoader] Loaded:', {
       baseUrl: this.baseUrl,
       version: this.mapping.version,
+      generated: this.mapping.generated,
       models: Object.keys(this.mapping.models).length,
       materials: Object.keys(this.mapping.materials).length,
+      textures: textureCount,
+      masterMaterials: masterCount,
     });
   }
 
@@ -83,6 +93,35 @@ export class MappingLoader {
 
   getBaseUrl(): string {
     return this.baseUrl;
+  }
+
+  getVersion(): string | undefined {
+    return this.mapping?.version;
+  }
+
+  // ============================================================================
+  // Master Materials
+  // ============================================================================
+
+  /**
+   * Get master material asset ID by name
+   */
+  getMasterMaterialId(name: string): number | null {
+    return this.mapping?.masterMaterials?.[name] ?? null;
+  }
+
+  /**
+   * Get all master material names
+   */
+  getMasterMaterialNames(): string[] {
+    return Object.keys(this.mapping?.masterMaterials || {});
+  }
+
+  /**
+   * Check if master material exists
+   */
+  hasMasterMaterial(name: string): boolean {
+    return !!this.mapping?.masterMaterials?.[name];
   }
 
   // ============================================================================
@@ -111,17 +150,31 @@ export class MappingLoader {
   }
 
   /**
-   * Get LOD configs for model
+   * Get LOD configs for model, sorted by distance
    */
   getModelLods(assetId: string | number): LodConfig[] {
-    return this.getModel(assetId)?.lods || [];
+    const model = this.getModel(assetId);
+    if (!model) return [];
+    // Sort by distance ascending (closest first)
+    return [...model.lods].sort((a, b) => a.distance - b.distance);
   }
 
   /**
    * Get full URL for LOD file
    */
-  getLodUrl(lodConfig: LodConfig): string {
-    return `${this.baseUrl}/${lodConfig.path}`;
+  getLodUrl(assetId: string | number, lodLevel: number): string | null {
+    const lods = this.getModel(assetId)?.lods;
+    if (!lods) return null;
+    const lod = lods.find(l => l.level === lodLevel);
+    if (!lod) return null;
+    return `${this.baseUrl}/${lod.file}`;
+  }
+
+  /**
+   * Get full URL for LOD config
+   */
+  getLodUrlFromConfig(lodConfig: LodConfig): string {
+    return `${this.baseUrl}/${lodConfig.file}`;
   }
 
   /**
@@ -132,30 +185,32 @@ export class MappingLoader {
   }
 
   /**
-   * Find LOD to load first (the one with maxDistance: null)
+   * Get initial LOD to load (highest distance = lowest detail = fastest load)
    */
   getInitialLodIndex(assetId: string | number): number {
     const lods = this.getModelLods(assetId);
-    const idx = lods.findIndex(l => l.maxDistance === null);
-    return idx >= 0 ? idx : lods.length - 1;
+    if (lods.length === 0) return 0;
+    // Return index of highest distance (last in sorted array)
+    return lods.length - 1;
   }
 
   /**
-   * Select LOD index by distance
+   * Select LOD level by camera distance
    */
-  selectLodByDistance(assetId: string | number, distance: number): number {
+  selectLodByDistance(assetId: string | number, cameraDistance: number): number {
     const lods = this.getModelLods(assetId);
+    if (lods.length === 0) return 0;
 
-    // Find first LOD where distance < maxDistance
-    for (let i = 0; i < lods.length; i++) {
-      const maxDist = lods[i].maxDistance;
-      if (maxDist !== null && distance < maxDist) {
-        return i;
+    // Lods are sorted by distance ascending
+    // Find first LOD where cameraDistance < next LOD's distance
+    for (let i = 0; i < lods.length - 1; i++) {
+      if (cameraDistance < lods[i + 1].distance) {
+        return lods[i].level;
       }
     }
 
-    // Return last LOD (infinite distance)
-    return lods.length - 1;
+    // Return highest distance LOD
+    return lods[lods.length - 1].level;
   }
 
   // ============================================================================
@@ -197,15 +252,74 @@ export class MappingLoader {
   // ============================================================================
 
   /**
-   * Get full URL for texture path
+   * Get texture entry by asset ID or packed key
    */
-  getTextureUrl(texturePath: string): string {
-    return `${this.baseUrl}/${texturePath}`;
+  getTextureEntry(key: string | number): string | PackedTextureEntry | null {
+    return this.mapping?.textures?.[String(key)] || null;
+  }
+
+  /**
+   * Get texture file path (works for both regular and packed)
+   */
+  getTexturePath(key: string | number): string | null {
+    const entry = this.getTextureEntry(key);
+    if (!entry) return null;
+    if (isPackedTextureEntry(entry)) {
+      return entry.file;
+    }
+    return entry;
+  }
+
+  /**
+   * Get full URL for texture
+   */
+  getTextureUrl(key: string | number): string | null {
+    const path = this.getTexturePath(key);
+    if (!path) return null;
+    return `${this.baseUrl}/${path}`;
+  }
+
+  /**
+   * Check if texture is a packed texture
+   */
+  isPackedTexture(key: string | number): boolean {
+    const entry = this.getTextureEntry(key);
+    return entry !== null && isPackedTextureEntry(entry);
+  }
+
+  /**
+   * Get packed texture source asset IDs
+   */
+  getPackedTextureSources(key: string | number): number[] | null {
+    const entry = this.getTextureEntry(key);
+    if (!entry || !isPackedTextureEntry(entry)) return null;
+    return entry.sources;
+  }
+
+  /**
+   * Check if texture exists in mapping
+   */
+  hasTexture(key: string | number): boolean {
+    return !!this.mapping?.textures?.[String(key)];
+  }
+
+  /**
+   * Get all texture keys
+   */
+  getAllTextureKeys(): string[] {
+    return Object.keys(this.mapping?.textures || {});
   }
 
   // ============================================================================
   // Utility
   // ============================================================================
+
+  /**
+   * Build full URL from relative path
+   */
+  buildUrl(relativePath: string): string {
+    return `${this.baseUrl}/${relativePath}`;
+  }
 
   /**
    * Get raw mapping (for debugging)

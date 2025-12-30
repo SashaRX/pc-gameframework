@@ -6,7 +6,9 @@
  * 2. Find master material by name
  * 3. Clone master (no shader compilation!)
  * 4. Apply params from JSON
- * 5. Queue texture loading (including ORM packed textures)
+ * 5. Store texture refs for later loading
+ *
+ * See docs/MAPPING_SPEC.md for material JSON structure
  */
 
 import type * as pc from 'playcanvas';
@@ -14,9 +16,9 @@ import { MappingLoader } from './MappingLoader';
 import { CacheManager } from './CacheManager';
 import {
   MaterialInstanceJson,
-  PackedTextureRef,
-  isPackedTextureRef,
   LoadedMaterialInstance,
+  TextureRef,
+  isPackedTextureKey,
 } from './MappingTypes';
 
 export interface MaterialInstanceLoaderConfig {
@@ -64,7 +66,7 @@ export class MaterialInstanceLoader {
    */
   registerMastersFromAssets(prefix = 'master_'): void {
     const assets = this.app.assets.filter((asset: pc.Asset) => {
-      return asset.type === 'material' && asset.name.toLowerCase().startsWith(prefix);
+      return asset.type === 'material' && asset.name.toLowerCase().startsWith(prefix.toLowerCase());
     });
 
     for (const asset of assets) {
@@ -72,6 +74,26 @@ export class MaterialInstanceLoader {
         const name = asset.name;
         this.masterMaterials.set(name, asset.resource as pc.StandardMaterial);
         this.log(`Auto-registered master: ${name}`);
+      }
+    }
+
+    this.log(`Total masters: ${this.masterMaterials.size}`);
+  }
+
+  /**
+   * Register masters from mapping.json masterMaterials section
+   */
+  registerMastersFromMapping(): void {
+    const names = this.mapping.getMasterMaterialNames();
+
+    for (const name of names) {
+      const assetId = this.mapping.getMasterMaterialId(name);
+      if (assetId !== null) {
+        const asset = this.app.assets.get(assetId);
+        if (asset?.resource) {
+          this.masterMaterials.set(name, asset.resource as pc.StandardMaterial);
+          this.log(`Registered master from mapping: ${name} (ID: ${assetId})`);
+        }
       }
     }
 
@@ -174,25 +196,26 @@ export class MaterialInstanceLoader {
       this.applyParams(material, json.params);
     }
 
-    // Collect texture paths for later loading
-    const texturePaths = new Map<string, string | PackedTextureRef>();
+    // Collect texture refs for later loading
+    // Values are either number (asset ID) or string (packed texture key)
+    const textureRefs = new Map<string, TextureRef>();
     if (json.textures) {
       for (const [slot, ref] of Object.entries(json.textures)) {
-        texturePaths.set(slot, ref);
+        textureRefs.set(slot, ref);
       }
     }
 
     this.log(`Created instance: ${id}`, {
       master: json.master,
       params: Object.keys(json.params || {}),
-      textures: Array.from(texturePaths.keys()),
+      textures: Array.from(textureRefs.keys()),
     });
 
     return {
       id,
       material,
       masterName: json.master,
-      texturePaths,
+      textureRefs,
       texturesLoaded: false,
     };
   }
@@ -245,25 +268,34 @@ export class MaterialInstanceLoader {
   }
 
   /**
-   * Get texture path for slot
+   * Get texture ref for slot (asset ID or packed key)
    */
-  getTexturePath(instance: LoadedMaterialInstance, slot: string): string | PackedTextureRef | null {
-    return instance.texturePaths.get(slot) || null;
+  getTextureRef(instance: LoadedMaterialInstance, slot: string): TextureRef | null {
+    return instance.textureRefs.get(slot) ?? null;
+  }
+
+  /**
+   * Get texture URL for slot
+   */
+  getTextureUrl(instance: LoadedMaterialInstance, slot: string): string | null {
+    const ref = instance.textureRefs.get(slot);
+    if (ref === undefined) return null;
+    return this.mapping.getTextureUrl(ref);
   }
 
   /**
    * Get all texture slots that need loading
    */
   getTextureSlots(instance: LoadedMaterialInstance): string[] {
-    return Array.from(instance.texturePaths.keys());
+    return Array.from(instance.textureRefs.keys());
   }
 
   /**
-   * Check if slot has packed texture (ORM)
+   * Check if slot has packed texture (string key like "concrete_ogm")
    */
   isPackedTexture(instance: LoadedMaterialInstance, slot: string): boolean {
-    const ref = instance.texturePaths.get(slot);
-    return ref ? isPackedTextureRef(ref) : false;
+    const ref = instance.textureRefs.get(slot);
+    return ref !== undefined && isPackedTextureKey(ref);
   }
 
   // ============================================================================

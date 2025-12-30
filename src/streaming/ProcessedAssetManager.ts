@@ -8,18 +8,19 @@
  * 4. Handle template instantiation
  * 5. Load models with LOD
  * 6. Load materials with instances
- * 7. Load textures (including ORM packed)
+ * 7. Load textures (including packed OGM)
+ *
+ * See docs/MAPPING_SPEC.md for configuration details
  */
 
 import type * as pc from 'playcanvas';
 import { MappingLoader } from './MappingLoader';
 import { AssetRegistrar } from './AssetRegistrar';
 import { MaterialInstanceLoader } from './MaterialInstanceLoader';
-import { OrmTextureHandler } from './OrmTextureHandler';
 import { LodManager } from './LodManager';
 import { CacheManager } from './CacheManager';
 import { Ktx2ProgressiveLoader } from '../loaders/Ktx2ProgressiveLoader';
-import { PackedTextureRef, isPackedTextureRef } from './MappingTypes';
+import { LoadedMaterialInstance, isPackedTextureKey } from './MappingTypes';
 
 export interface ProcessedAssetManagerConfig {
   /** URL to mapping.json */
@@ -28,7 +29,7 @@ export interface ProcessedAssetManagerConfig {
   libktxModuleUrl: string;
   /** libktx WASM URL */
   libktxWasmUrl: string;
-  /** Master material prefix in asset registry */
+  /** Master material prefix in asset registry (if not using masterMaterials in mapping) */
   masterMaterialPrefix?: string;
   /** Max concurrent texture loads */
   maxConcurrentTextures?: number;
@@ -53,7 +54,6 @@ export class ProcessedAssetManager {
   private mapping: MappingLoader;
   private registrar: AssetRegistrar;
   private materialLoader: MaterialInstanceLoader;
-  private ormHandler: OrmTextureHandler;
   private lodManager: LodManager;
   private cache: CacheManager;
 
@@ -75,7 +75,6 @@ export class ProcessedAssetManager {
     this.cache = CacheManager.getInstance(512, this.config.useIndexedDB);
     this.registrar = new AssetRegistrar(app, { debug: this.config.debug });
     this.materialLoader = new MaterialInstanceLoader(app, { debug: this.config.debug });
-    this.ormHandler = new OrmTextureHandler(this.config.debug);
     this.lodManager = new LodManager(app, { debug: this.config.debug });
   }
 
@@ -108,7 +107,12 @@ export class ProcessedAssetManager {
     this.registrar.registerAll();
 
     // 4. Register master materials
-    this.materialLoader.registerMastersFromAssets(this.config.masterMaterialPrefix);
+    // Try from mapping first, fall back to prefix search
+    if (this.mapping.getMasterMaterialNames().length > 0) {
+      this.materialLoader.registerMastersFromMapping();
+    } else if (this.config.masterMaterialPrefix) {
+      this.materialLoader.registerMastersFromAssets(this.config.masterMaterialPrefix);
+    }
 
     // 5. Find camera for LOD
     this.lodManager.findCamera();
@@ -216,67 +220,36 @@ export class ProcessedAssetManager {
     const instance = await this.materialLoader.load(id);
 
     // Load textures for this material
-    await this.loadMaterialTextures(instance.id);
+    await this.loadMaterialTextures(instance);
   }
 
   /**
    * Load all textures for a material
    */
-  private async loadMaterialTextures(materialId: string): Promise<void> {
-    const instance = this.materialLoader.getLoaded(materialId);
-    if (!instance) return;
-
+  private async loadMaterialTextures(instance: LoadedMaterialInstance): Promise<void> {
     const slots = this.materialLoader.getTextureSlots(instance);
 
     for (const slot of slots) {
-      const ref = instance.texturePaths.get(slot);
-      if (!ref) continue;
+      const ref = this.materialLoader.getTextureRef(instance, slot);
+      if (ref === null) continue;
 
-      if (isPackedTextureRef(ref)) {
-        // Packed texture (ORM)
-        await this.loadPackedTexture(instance, slot, ref);
-      } else {
-        // Simple texture
-        await this.loadSimpleTexture(instance, slot, ref);
+      // Get texture URL from mapping (works for both asset IDs and packed keys)
+      const url = this.mapping.getTextureUrl(ref);
+      if (!url) {
+        this.log(`Texture not found in mapping: ${ref}`);
+        continue;
+      }
+
+      const texture = await this.loadTexture(url);
+      if (texture) {
+        // Apply texture to material slot
+        (instance.material as any)[slot] = texture;
+        instance.material.update();
+        this.log(`Applied texture to ${instance.id}.${slot}`);
       }
     }
 
     instance.texturesLoaded = true;
-  }
-
-  /**
-   * Load simple texture
-   */
-  private async loadSimpleTexture(
-    instance: { id: string; material: pc.StandardMaterial },
-    slot: string,
-    path: string
-  ): Promise<void> {
-    const url = this.mapping.getTextureUrl(path);
-    const texture = await this.loadTexture(url);
-
-    if (texture) {
-      (instance.material as any)[slot] = texture;
-      instance.material.update();
-      this.log(`Applied texture to ${instance.id}.${slot}`);
-    }
-  }
-
-  /**
-   * Load packed texture (ORM)
-   */
-  private async loadPackedTexture(
-    instance: { id: string; material: pc.StandardMaterial },
-    slot: string,
-    ref: PackedTextureRef
-  ): Promise<void> {
-    const url = this.mapping.getTextureUrl(ref.path);
-    const texture = await this.loadTexture(url);
-
-    if (texture) {
-      this.ormHandler.applyOrmTexture(instance.material, texture, ref);
-      this.log(`Applied ORM texture to ${instance.id}`);
-    }
   }
 
   /**
