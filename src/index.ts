@@ -64,8 +64,17 @@ export type {
 export { Ktx2LoaderScript } from './scripts/Ktx2LoaderScript';
 export { StreamingManagerScript } from './scripts/StreamingManagerScript';
 export { StreamedTextureScript } from './scripts/StreamedTextureScript';
+export { ProcessedAssetScript } from './scripts/ProcessedAssetScript';
+export { StreamedModelScript } from './scripts/StreamedModelScript';
 
 // Register scripts
 import './scripts/Ktx2LoaderScript';
 import './scripts/StreamingManagerScript';
 import './scripts/StreamedTextureScript';
+import './scripts/ProcessedAssetScript';
+import './scripts/StreamedModelScript';
+
+// ============================================================================
+// Streaming - Asset streaming system (new)
+// ============================================================================
+export * from './streaming';

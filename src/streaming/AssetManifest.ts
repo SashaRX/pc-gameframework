@@ -1,7 +1,15 @@
 /**
- * AssetManifest - Registry of all streamable assets on external server
+ * @deprecated Use MappingLoader instead.
  *
- * Loads manifest JSON at startup, provides URL resolution and asset lookup.
+ * AssetManifest - Legacy registry (replaced by MappingLoader)
+ *
+ * For new projects with PlaycanvasAssetProcessor, use MappingLoader which:
+ * - Loads mapping.json format
+ * - Supports model LODs with distances
+ * - Supports material instances
+ * - Integrates with AssetRegistrar for template support
+ *
+ * Legacy: Loads manifest JSON at startup, provides URL resolution.
  */
 
 import {
