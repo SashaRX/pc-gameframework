@@ -307,20 +307,7 @@ export interface LoadedPackedTexture {
   channelMap: Map<string, TextureChannelMapping>;
 }
 
-/**
- * Material with channel-aware texture application
- */
-export interface LoadedMaterialInstance {
-  id: string;
-  material: pc.StandardMaterial;
-  masterName: string;
-  /** Original texture IDs needed (for tracking dependencies) */
-  requiredTextures: string[];
-  /** Packed texture IDs needed */
-  requiredPackedTextures: string[];
-  /** Slot configurations for applying textures */
-  textureSlots: Map<string, MaterialTextureSlot>;
-}
+// LoadedMaterialInstance moved to MappingTypes.ts
 
 // ============================================================================
 // Type Guards

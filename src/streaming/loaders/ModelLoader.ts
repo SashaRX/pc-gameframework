@@ -1,7 +1,14 @@
 /**
- * ModelLoader - Load GLB models from external server
+ * @deprecated Use LodModelLoader instead for LOD support.
  *
- * Features:
+ * ModelLoader - Load GLB models from external server (legacy)
+ *
+ * For new projects, use LodModelLoader which provides:
+ * - Multiple LOD levels per model
+ * - Distance-based LOD switching
+ * - Lazy loading of lower priority LODs
+ *
+ * Legacy features:
  * - Loads GLB via fetch
  * - Supports meshoptimizer compressed models
  * - Caches loaded models

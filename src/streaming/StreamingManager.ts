@@ -1,7 +1,18 @@
 /**
- * StreamingManager - Main coordinator for asset streaming
+ * @deprecated Use ProcessedAssetManager instead.
  *
- * Responsibilities:
+ * StreamingManager - Legacy coordinator for asset streaming
+ *
+ * This class is DEPRECATED. Use ProcessedAssetManager for new projects.
+ *
+ * ProcessedAssetManager provides:
+ * - mapping.json support (from PlaycanvasAssetProcessor)
+ * - Asset ID registration for templates
+ * - LOD model loading with distance switching
+ * - Material instances (master + clone)
+ * - ORM packed texture support
+ *
+ * Legacy responsibilities:
  * - Load manifest at startup
  * - Scan templates for asset references
  * - Coordinate loading of models, materials, textures
