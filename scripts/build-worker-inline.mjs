@@ -11,7 +11,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const workerPath = path.join(__dirname, '../build/esm-temp/workers/ktx-transcode.worker.js');
-const outputPath = path.join(__dirname, '../build/esm-temp/ktx2-loader/worker-inline.js');
+const outputPath = path.join(__dirname, '../build/esm-temp/loaders/worker-inline.js');
 
 try {
   // Read worker code

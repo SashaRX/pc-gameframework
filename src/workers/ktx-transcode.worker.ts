@@ -10,7 +10,7 @@ import type {
   WorkerInitMessage,
   WorkerTranscodeMessage,
   WorkerResponse,
-} from '../ktx2-loader/types';
+} from '../loaders/ktx2-types';
 
 let ktxModule: KtxModule | null = null;
 let ktxApi: KtxApi | null = null;

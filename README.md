@@ -1,319 +1,244 @@
-# KTX2 Progressive Loader for PlayCanvas
+# pc-gameframework
 
-Complete texture streaming solution for PlayCanvas Engine 2.12.4+ with progressive loading, memory management, and hardware-compressed format support.
+PlayCanvas Game Framework - модульный фреймворк для создания игр на PlayCanvas Engine 2.12+.
 
-## 🎯 Two Usage Modes
+## Текущее состояние (v0.1.0)
 
-### 1. Simple Mode (Single Texture)
-Use `Ktx2LoaderScript` for loading individual textures progressively.
-- Perfect for simple cases and testing
-- Easy to configure via Inspector
-- See [Quick Start ESM](QUICK_START_ESM.md)
+### Реализовано
 
-### 2. Advanced Mode (Texture Streaming Manager)
-Use `StreamingManagerScript` for managing multiple textures with priority-based loading.
-- Automatic memory management
-- Distance-based priority
-- Category-based streaming policies
-- See [Streaming Quick Start](STREAMING_QUICK_START.md)
+| Модуль | Статус | Описание |
+|--------|--------|----------|
+| **KTX2 Progressive Loader** | ✅ Ready | Прогрессивная загрузка текстур (mip-by-mip) |
+| **Meshoptimizer Decoder** | ✅ Ready | Декодер для EXT_meshopt_compression в GLB |
+| **Texture Streaming** | ✅ Ready | Приоритетная загрузка текстур с memory budget |
+| **GPU Format Detection** | ✅ Ready | Автоопределение BC/ASTC/ETC/PVRTC |
 
-## ✨ Features
+### В планах
 
-### Core Capabilities
-- ✅ Progressive loading from low to high resolution
-- ✅ HTTP Range requests for partial downloads
-- ✅ Hardware compressed texture formats (BC1-7, ETC1/2, ASTC, PVRTC)
-- ✅ Adaptive quality based on screen size
-- ✅ IndexedDB caching with TTL
-- ✅ Web Worker transcoding (non-blocking)
-- ✅ FPS throttling and pause/resume API
+| Модуль | Статус | Описание |
+|--------|--------|----------|
+| **Material System** | ⏳ Planned | Master/Instance материалы с JSON параметрами |
+| **Cubemap Manager** | ⏳ Planned | Runtime генерация cubemap (4 tetra cameras) |
+| **Sector Streaming** | ⏳ Planned | Загрузка секторов по позиции камеры |
+| **Lightmap Loader** | ⏳ Planned | Загрузка lightmap для секторов |
+| **PostFX System** | ⏳ Planned | HDR tonemapping, bloom, SMAA |
 
-### Streaming Manager
-- ✅ Priority-based multi-texture streaming
-- ✅ Memory budget management with automatic eviction
-- ✅ Category system (persistent/level/dynamic)
-- ✅ Distance-based priority calculation
-- ✅ LRU cache with memory pressure handling
-- ✅ Real-time statistics and monitoring
+## Архитектура
 
-### Production Ready
-- ✅ External URL support (no bundling required)
-- ✅ Custom shader chunks for progressive LOD
-- ✅ Anisotropic filtering
-- ✅ Supports ETC1S (BasisLZ) and UASTC formats
-- ✅ Comprehensive error handling
+```
+src/
+├── libs/                    # Внешние библиотеки (WASM/JS)
+│   ├── libktx/              # KTX2 transcoder
+│   │   ├── LibktxLoader.ts  # Singleton загрузчик
+│   │   ├── libktx.mjs
+│   │   └── libktx.wasm
+│   └── meshoptimizer/       # Meshopt decoder v0.21
+│       ├── MeshoptLoader.ts # Singleton загрузчик
+│       └── meshopt_decoder.mjs
+│
+├── loaders/                 # Загрузчики ресурсов
+│   ├── Ktx2ProgressiveLoader.ts
+│   ├── KtxCacheManager.ts
+│   ├── GpuFormatDetector.ts
+│   ├── MemoryPool.ts
+│   └── utils/
+│
+├── systems/                 # Игровые системы
+│   └── streaming/           # Texture streaming system
+│       ├── TextureStreamingManager.ts
+│       ├── PriorityQueue.ts
+│       ├── MemoryTracker.ts
+│       └── CategoryManager.ts
+│
+├── scripts/                 # PlayCanvas Script Components
+│   ├── Ktx2LoaderScript.ts
+│   ├── StreamingManagerScript.ts
+│   └── StreamedTextureScript.ts
+│
+├── shaders/                 # Shader chunks (будущее)
+│
+└── workers/                 # Web Workers
+    └── ktx-transcode.worker.ts
+```
 
-## 🚀 Quick Start
+## Планируемая архитектура
 
-### Mode 1: Simple Single Texture Loading
+### PlaycanvasAssetProcessor (внешний инструмент)
 
-Perfect for testing or loading individual textures:
+Конвертирует ассеты для использования в игре:
+- **Текстуры** → KTX2 (ETC1S/UASTC) с mipmap
+- **Модели** → GLB + meshopt compression + LODs
+- **Материалы** → JSON с параметрами (albedo, smoothness, etc.)
+
+### Sectors (секторы уровня)
+
+Секторы - это PlayCanvas templates содержащие:
+- Модели (GLB с meshopt)
+- Освещение
+- Cubemap probes
+- Lightmaps
+
+Загружаются динамически по позиции камеры.
+
+### Material System
+
+**Master Materials** - базовые материалы с кастомными shader chunks:
+- `pbr_opaque` - стандартный PBR
+- `pbr_alpha` - с прозрачностью
+- Компилируются один раз при старте
+
+**Instance Materials** - JSON файлы с параметрами:
+```json
+{
+  "master": "pbr_opaque",
+  "params": {
+    "albedo": [1, 0.8, 0.6],
+    "smoothness": 0.7,
+    "metalness": 0.0,
+    "albedoMap": "content/textures/wood_albedo.ktx2",
+    "normalMap": "content/textures/wood_normal.ktx2"
+  }
+}
+```
+
+При загрузке: clone master → apply uniforms.
+
+### Cubemap System
+
+Runtime генерация reflection probes:
+- 4 tetra cameras (ортогональное хранение)
+- Box projection
+- Blending между probes
+
+### PostFX Pipeline
+
+- HDR rendering
+- Tonemapping (ACES/Reinhard)
+- Bloom с blur mipmap buffer
+- SMAA антиалиасинг
+
+## Установка и сборка
 
 ```bash
-# 1. Build
 npm install
-npm run build:esm
-
-# 2. Upload to PlayCanvas
-# Upload files from build/esm/:
-# - scripts/Ktx2LoaderScript.mjs
-# - ktx2-loader/*.mjs
-# - streaming/*.mjs (optional, for streaming)
-
-# 3. Add script to entity with model component
-# 4. Configure in Inspector:
-#    - ktxUrl: https://example.com/texture.ktx2
-#    - libktxMjsUrl: https://raw.githubusercontent.com/.../libktx.mjs
-#    - libktxWasmUrl: https://raw.githubusercontent.com/.../libktx.wasm
+npm run build          # ESM сборка
+npm run build-push     # Сборка + push в PlayCanvas
+npm run cleanup        # Очистка orphaned файлов
+npm run cleanup:dry    # Показать что будет удалено
 ```
 
-See [Quick Start ESM](QUICK_START_ESM.md) for detailed instructions.
+## Использование
 
-### Mode 2: Texture Streaming Manager
+### KTX2 Progressive Loading
 
-For managing multiple textures in open-world games:
+```typescript
+import { Ktx2ProgressiveLoader } from 'pc-gameframework';
 
-```bash
-# 1. Add StreamingManager to scene (empty entity)
-# 2. Configure memory budget and quality preset
-# 3. Add StreamedTexture scripts to objects
-# 4. Set categories: persistent / level / dynamic
+const loader = new Ktx2ProgressiveLoader(app, texture, {
+  progressive: true,
+  verbose: true,
+  enableCache: true
+});
+
+await loader.load('https://example.com/texture.ktx2');
 ```
 
-See [Streaming Quick Start](STREAMING_QUICK_START.md) for detailed guide.
+### Meshoptimizer Decoder
 
-## Configuration
+```typescript
+import { MeshoptLoader } from 'pc-gameframework';
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| ktxUrl | string | required | URL to KTX2 file |
-| libktxMjsUrl | string | optional | External URL for libktx.mjs |
-| libktxWasmUrl | string | optional | External URL for libktx.wasm |
-| progressive | boolean | true | Enable progressive loading |
-| isSrgb | boolean | false | sRGB color space |
-| verbose | boolean | true | Detailed logging |
-| enableCache | boolean | true | IndexedDB cache |
-| useWorker | boolean | true | Web Worker transcoding |
-| adaptiveLoading | boolean | false | Stop at screen resolution |
-| stepDelayMs | number | 150 | Delay between levels (ms) |
-| enableAniso | boolean | true | Anisotropic filtering |
-| adaptiveThrottling | boolean | false | Auto-adjust delays based on FPS |
-| targetFps | number | 60 | Target frame rate for throttling |
-| minStepDelayMs | number | 0 | Min delay when FPS high |
-| maxStepDelayMs | number | 500 | Max delay when FPS low |
+// Инициализация (singleton)
+const decoder = await MeshoptLoader.getInstance().initialize(app);
 
-### External URLs
+// Декодирование буфера
+decoder.decodeGltfBuffer(target, count, size, source, mode, filter);
+```
 
-Using external URLs avoids 403 errors in PlayCanvas published builds.
+### Texture Streaming Manager
 
-Recommended:
-- libktxMjsUrl: `https://raw.githubusercontent.com/SashaRX/ktx-host/refs/heads/main/libktx.mjs`
-- libktxWasmUrl: `https://raw.githubusercontent.com/SashaRX/ktx-host/refs/heads/main/libktx.wasm`
+```typescript
+import { TextureStreamingManager } from 'pc-gameframework';
 
-## Creating KTX2 Files
+const manager = new TextureStreamingManager();
+await manager.initialize(app, {
+  memoryBudgetMB: 256,
+  qualityPreset: 'balanced'
+});
 
-### Color/Albedo Textures
+// Регистрация текстуры
+manager.registerTexture(entity, 'diffuse', 'content/textures/albedo.ktx2', {
+  category: 'level'
+});
+```
+
+## Создание KTX2 файлов
+
+### Color/Albedo текстуры
 
 ```bash
-# ETC1S (BasisLZ) - Universal compression, good for solid colors
-toktx --t2 --encode etc1s --clevel 4 --qlevel 255 --genmipmap color.ktx2 input.png
+# UASTC (высокое качество)
+toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .5 \
+  --uastc_rdo_d 65536 --zcmp 22 --genmipmap color.ktx2 input.png
 
-# UASTC - High quality for detailed textures with RDO + Zstd
-toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .5 --uastc_rdo_d 65536 --zcmp 22 --genmipmap color.ktx2 input.png
-
-# UASTC - Very high quality (lower RDO lambda)
-toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .25 --uastc_rdo_d 65536 --zcmp 22 --genmipmap color_hq.ktx2 input.png
-
-# Low quality (smaller file size)
-toktx --t2 --encode etc1s --clevel 4 --qlevel 128 --genmipmap color_low.ktx2 input.png
+# ETC1S (меньший размер)
+toktx --t2 --encode etc1s --clevel 4 --qlevel 255 \
+  --genmipmap color.ktx2 input.png
 ```
 
 ### Normal Maps
 
 ```bash
-# UASTC with normal mode and linear colorspace (recommended)
-toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .25 --uastc_rdo_d 65536 --zcmp 22 --normal_mode --assign_oetf linear --assign_primaries none --genmipmap normal.ktx2 input.png
-
-# Alternative: Keep RGB channels (prevent conversion to 2-component)
-toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .25 --uastc_rdo_d 65536 --zcmp 22 --input_swizzle rgb1 --assign_oetf linear --assign_primaries none --genmipmap normal_rgb.ktx2 input.png
+toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .25 \
+  --uastc_rdo_d 65536 --zcmp 22 --normal_mode \
+  --assign_oetf linear --assign_primaries none \
+  --genmipmap normal.ktx2 input.png
 ```
 
-### Roughness/Metallic/ORM Maps
+### ORM Maps (Roughness/Metallic)
 
 ```bash
-# UASTC with linear colorspace
-toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .5 --uastc_rdo_d 65536 --zcmp 22 --assign_oetf linear --assign_primaries none --genmipmap orm.ktx2 input.png
-
-# ETC1S alternative (smaller size, lower quality)
-toktx --t2 --encode etc1s --clevel 4 --qlevel 192 --assign_oetf linear --assign_primaries none --genmipmap orm_low.ktx2 input.png
+toktx --t2 --encode uastc --uastc_quality 4 --uastc_rdo_l .5 \
+  --uastc_rdo_d 65536 --zcmp 22 \
+  --assign_oetf linear --assign_primaries none \
+  --genmipmap orm.ktx2 input.png
 ```
 
-**Parameters explained:**
-- `--t2`: Output KTX2 format (required for KTX2)
-- `--encode etc1s`: ETC1S/BasisLZ compression (universal GPU support, smaller files)
-- `--encode uastc`: UASTC compression (higher quality, transcodable)
-- `--clevel 4`: ETC1S compression level (0-5, higher = slower but better compression)
-- `--qlevel 255`: ETC1S quality level (1-255, higher = better quality, lower = smaller)
-- `--uastc_quality 4`: UASTC encoding quality (0=fastest/43dB, 4=very slow/48dB)
-- `--uastc_rdo_l .25`: RDO lambda (.001-10.0, lower = higher quality, try .25-10)
-- `--uastc_rdo_d 65536`: RDO dictionary size in bytes (64-65536, default 4096)
-- `--zcmp 22`: Zstandard supercompression level (1-22, default 3, >20 needs more memory)
-- `--normal_mode`: Convert 3-component normals to 2-component X+Y format, optimize encoding
-- `--input_swizzle rgb1`: Keep RGB channels, set alpha to 1
-- `--assign_oetf linear`: Force linear transfer function (for non-color data)
-- `--assign_primaries none`: No color primaries (for non-color data)
-- `--genmipmap`: Generate full mipmap pyramid
+## npm Scripts
 
-**Note:** `--bcmp` and `--uastc <level>` are deprecated. Use `--encode etc1s` and `--encode uastc` instead.
-
-Requires HTTP Range support on server (CDN, S3, etc).
-
-## Build Commands
-
-| Command | Description |
-|---------|-------------|
-| `npm run build:esm` | Build ESM modules |
-| `npm run build:clean` | Clean build + rebuild |
-| `npm run watch:esm` | Watch mode ESM |
-| `npm run push` | Upload to PlayCanvas |
-| `npm run build-push:esm` | Build + upload |
-
-## 📦 Project Structure
-
-```
-src/
-├── ktx2-loader/                          # Core KTX2 loader
-│   ├── Ktx2ProgressiveLoader.ts         # Main progressive loader
-│   ├── LibktxLoader.ts                  # External URL loader
-│   ├── KtxCacheManager.ts               # IndexedDB caching
-│   ├── GpuFormatDetector.ts             # Hardware format detection
-│   ├── MemoryPool.ts                    # Memory buffer pooling
-│   ├── types.ts                         # TypeScript interfaces
-│   └── utils/
-│       ├── alignment.ts                 # KTX2 alignment helpers
-│       └── colorspace.ts                # DFD & colorspace parsing
-│
-├── streaming/                            # Multi-texture streaming system
-│   ├── TextureStreamingManager.ts       # Main orchestrator
-│   ├── TextureHandle.ts                 # Individual texture wrapper
-│   ├── TextureRegistry.ts               # Central texture storage
-│   ├── CategoryManager.ts               # Category configs
-│   ├── MemoryTracker.ts                 # Memory budget & eviction
-│   ├── SimpleScheduler.ts               # Priority queue & loading
-│   ├── PriorityQueue.ts                 # Priority heap
-│   └── types.ts                         # Streaming interfaces
-│
-├── scripts/                              # PlayCanvas scripts
-│   ├── Ktx2LoaderScript.ts              # Simple single-texture loader
-│   ├── StreamingManagerScript.ts        # Global streaming manager
-│   └── StreamedTextureScript.ts         # Per-object texture registration
-│
-├── workers/                              # Web Workers
-│   └── ktx-transcode.worker.ts          # Background transcoding
-│
-build/esm/                                # Compiled ESM modules
-├── scripts/
-│   ├── Ktx2LoaderScript.mjs
-│   ├── StreamingManagerScript.mjs
-│   └── StreamedTextureScript.mjs
-├── ktx2-loader/                          # Core loader modules
-├── streaming/                            # Streaming system modules
-└── workers/                              # Inline worker code
-```
-
-## 🎯 Implementation Status
-
-### ✅ Phase 1-3: Core & Performance (100% Complete)
-- ✅ HTTP Range requests + KTX2 header parsing
-- ✅ Mini-KTX2 repack for single levels (ETC1S + UASTC)
-- ✅ SGD repacking for ETC1S
-- ✅ Progressive loading with LOD clamping
-- ✅ GPU upload with WebGL2
-- ✅ Custom shader chunks
-- ✅ Adaptive loading based on screen size
-- ✅ IndexedDB caching with TTL & LRU
-- ✅ Anisotropic filtering
-- ✅ External URL support (LibktxLoader)
-- ✅ Web Worker transcoding (non-blocking)
-- ✅ Enhanced FPS throttling with RAF
-- ✅ Pause/resume API
-- ✅ Memory pool & full KTX2 assembly
-- ✅ Advanced cache statistics
-
-### ✅ Phase 4.1: Hardware Compressed Formats (100% Complete)
-- ✅ GPU capabilities detection
-- ✅ BC1-BC7 (Desktop: DirectX)
-- ✅ ETC1/ETC2 (Mobile: OpenGL ES)
-- ✅ ASTC (Modern mobile & desktop)
-- ✅ PVRTC (iOS legacy)
-- ✅ Automatic format selection
-- ✅ Direct compressed texture upload
-- ✅ Alpha channel detection from DFD
-- ✅ 4-8x GPU memory savings
-
-### ✅ Phase 4.2: Texture Streaming Manager (100% Complete)
-- ✅ Multi-texture priority system
-- ✅ Category-based streaming (persistent/level/dynamic)
-- ✅ Memory budget management
-- ✅ Distance-based priority calculation
-- ✅ Automatic texture eviction (LRU + priority)
-- ✅ Memory pressure levels
-- ✅ Quality presets (mobile/balanced/high-quality)
-- ✅ Real-time statistics & monitoring
-- ✅ PlayCanvas script integration
-
-### 🔮 Future Enhancements
-- ⏳ Streaming decode within single level
-- ⏳ WebGPU backend support
-- ⏳ Worker pool for parallel textures
-
-See [MILESTONES.md](MILESTONES.md) for detailed roadmap.
+| Команда | Описание |
+|---------|----------|
+| `npm run build` | ESM сборка |
+| `npm run build:clean` | Очистка build/ + пересборка |
+| `npm run watch` | Watch mode |
+| `npm run push` | Push в PlayCanvas |
+| `npm run build-push` | Сборка + push |
+| `npm run cleanup` | Удалить orphaned файлы |
+| `npm run cleanup:dry` | Dry-run очистки |
 
 ## Troubleshooting
 
-**403 Forbidden or libktx not initialized**
-- Use external URLs for libktx files
-- Set libktxMjsUrl and libktxWasmUrl in Inspector
+**403 Forbidden при загрузке libktx**
+- Используйте Asset Registry с типом Binary (не Script)
+- Или внешние URL на raw.githubusercontent.com
 
-**CORS policy error**
-- Wrong: `github.com/.../file?raw=1` (redirects)
-- Correct: `raw.githubusercontent.com/.../file` (direct)
+**CORS ошибки**
+- Неправильно: `github.com/.../file?raw=1` (редирект)
+- Правильно: `raw.githubusercontent.com/.../file`
 
-**Range request failed**
-- Server doesn't support HTTP Range header
-- Falls back to full file download
+**Текстура пикселизированная**
+- Проверьте консоль - загружаются ли все mip levels
+- Включите verbose режим для диагностики
 
-**Pixelated texture**
-- Check console for LOD window updates
-- Verify all mip levels loaded
-
-**Script attributes not visible**
-- Use ESM Script format with @attribute JSDoc
-- Refresh PlayCanvas Editor
-
-**Memory issues**
-- Reduce texture size or disable cache
-- Increase stepDelayMs
-
-## 📚 Documentation
-
-- [Quick Start ESM](QUICK_START_ESM.md) - Simple single texture loading
-- [Streaming Quick Start](STREAMING_QUICK_START.md) - Multi-texture streaming setup
-- [Streaming Usage Guide](STREAMING_USAGE.md) - Complete API reference
-- [Implementation Summary](IMPLEMENTATION_SUMMARY.md) - Technical details
-- [Milestones](MILESTONES.md) - Development roadmap
-- [Setup Guide](SETUP_GUIDE.md) - PlayCanvas integration
-
-## 🔗 References
+## Ссылки
 
 - [KTX2 Specification](https://registry.khronos.org/KTX/specs/2.0/ktxspec.v2.html)
-- [KTX-Software Tools](https://github.com/KhronosGroup/KTX-Software)
+- [KTX-Software](https://github.com/KhronosGroup/KTX-Software)
+- [Meshoptimizer](https://github.com/zeux/meshoptimizer)
 - [PlayCanvas Engine](https://playcanvas.com/)
-- [Basis Universal](https://github.com/BinomialLLC/basis_universal)
-- [WebGL Compressed Textures](https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API/Compressed_texture_formats)
 
 ---
 
-**Status:** Production Ready 🚀
+**Version:** 0.1.0
 **License:** MIT
-**Maintained by:** SashaRX
+**Author:** SashaRX

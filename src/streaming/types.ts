@@ -1,273 +1,169 @@
 /**
- * Type definitions for Texture Streaming Manager
+ * Streaming System Types
  */
 
-import type * as pc from 'playcanvas';
-import type { Ktx2LoaderConfig } from '../ktx2-loader/types';
-
 // ============================================================================
-// Texture Categories
+// Asset Manifest Types
 // ============================================================================
 
-/**
- * Texture loading categories
- * - persistent: Always loaded, high priority (UI, player, weapons)
- * - level: Loaded with level, medium priority (level geometry)
- * - dynamic: Streamed by distance, variable priority (world objects)
- */
-export type TextureCategory = 'persistent' | 'level' | 'dynamic';
-
-/**
- * Texture loading state
- */
-export type TextureState =
-  | 'unloaded'    // Not loaded
-  | 'queued'      // In loading queue
-  | 'loading'     // Currently loading
-  | 'partial'     // Partially loaded (some LODs)
-  | 'loaded'      // Fully loaded
-  | 'error'       // Load failed
-  | 'evicting';   // Being evicted from memory
-
-// ============================================================================
-// Configuration Interfaces
-// ============================================================================
-
-/**
- * Configuration for a texture category
- */
-export interface CategoryConfig {
-  /** Load immediately when registered */
-  loadImmediately: boolean;
-
-  /** Keep in memory (don't evict) */
-  keepInMemory: boolean;
-
-  /** Target LOD level (0=full, higher=lower quality) */
-  targetLod: number;
-
-  /** Priority weight multiplier */
-  priorityWeight: number;
-
-  /** Maximum memory budget for this category (MB) */
-  maxMemoryMB?: number;
+export interface ModelEntry {
+  /** Relative path to GLB file */
+  file: string;
+  /** File size in bytes (for preload estimation) */
+  size?: number;
+  /** LOD variants if available */
+  lods?: string[];
 }
 
-/**
- * Global streaming manager configuration
- */
-export interface StreamingManagerConfig {
-  /** Maximum total VRAM budget (MB) */
-  maxMemoryMB: number;
-
-  /** Maximum concurrent texture loads */
-  maxConcurrent: number;
-
-  /** Priority recalculation interval (seconds) */
-  priorityUpdateInterval: number;
-
-  /** Distance factor weight in priority calculation */
-  distanceWeight: number;
-
-  /** Enable debug logging */
-  debugLogging: boolean;
-
-  /** Log priority changes */
-  logPriorityChanges: boolean;
-
-  /** URL to libktx.mjs module (optional, overrides Asset Registry) */
-  libktxModuleUrl?: string;
-
-  /** URL to libktx.wasm binary (optional, overrides Asset Registry) */
-  libktxWasmUrl?: string;
+export interface MaterialEntry {
+  /** Relative path to material instance JSON */
+  file: string;
+  /** Master material name in PlayCanvas */
+  master: string;
 }
 
-/**
- * Texture registration options
- */
-export interface TextureRegistration {
-  /** Unique identifier */
-  id: string;
-
-  /** KTX2 file URL */
-  url: string;
-
-  /** Category (persistent/level/dynamic) */
-  category: TextureCategory;
-
-  /** Entity to apply texture to */
-  entity: pc.Entity;
-
-  /** Minimum LOD level (highest number = lowest quality) */
-  minLod?: number;
-
-  /** Maximum LOD level (0 = full quality) */
+export interface TextureEntry {
+  /** Relative path to KTX2 file */
+  file: string;
+  /** File size in bytes */
+  size?: number;
+  /** Texture category for priority */
+  category?: 'hero' | 'environment' | 'detail';
+  /** Max LOD level (0 = full quality) */
   maxLod?: number;
+}
 
-  /** Target LOD level */
-  targetLod?: number;
+export interface AssetManifestData {
+  /** Base URL for all assets */
+  baseUrl: string;
+  /** Version for cache invalidation */
+  version?: string;
+  /**
+   * Assets by PlayCanvas Asset Registry ID
+   * Key is the asset ID as string (e.g., "12345678")
+   */
+  assets: Record<string, AssetEntry>;
+}
 
-  /** User priority override (0-2, default 1) */
-  userPriority?: number;
-
-  /** Additional Ktx2Loader config options */
-  loaderConfig?: Partial<Ktx2LoaderConfig>;
+export interface AssetEntry {
+  /** Asset type */
+  type: 'model' | 'material' | 'texture';
+  /** Relative path to file */
+  file: string;
+  /** File size in bytes (for preload estimation) */
+  size?: number;
+  /** For materials: master material name */
+  master?: string;
+  /** For textures: category for priority */
+  category?: 'hero' | 'environment' | 'detail';
 }
 
 // ============================================================================
-// Handle & State
+// Material Instance Types
 // ============================================================================
 
-/**
- * Texture handle metadata
- */
-export interface TextureMetadata {
+export interface MaterialInstanceData {
+  /** Unique material ID */
   id: string;
-  url: string;
-  category: TextureCategory;
-  entity: pc.Entity;
-
-  state: TextureState;
-
-  minLod: number;
-  maxLod: number;
-  targetLod: number;
-  currentLod: number;
-
-  priority: number;
-  userPriority: number;
-
-  memoryUsage: number; // bytes
-  lastUsed: number;    // timestamp
-  loadStartTime?: number;
-  loadEndTime?: number;
-
-  error?: Error;
-  abortController?: AbortController;
+  /** Master material name */
+  master: string;
+  /** Texture slot mappings (slot -> texture ID) */
+  textures: Record<string, string>;
+  /** Material parameters */
+  params?: Record<string, number | number[] | boolean>;
 }
 
 // ============================================================================
-// Events
+// Cache Types
 // ============================================================================
 
-/**
- * Texture event types
- */
-export type TextureEventType =
-  | 'registered'
-  | 'queued'
-  | 'loadStart'
-  | 'loadProgress'
-  | 'loaded'
-  | 'error'
-  | 'evicted'
-  | 'unregistered'
-  | 'priorityChanged';
+export type AssetType = 'model' | 'material' | 'texture';
 
-/**
- * Texture event data
- */
-export interface TextureEvent {
-  type: TextureEventType;
-  textureId: string;
+export interface CachedAsset {
+  id: string;
+  type: AssetType;
+  data: ArrayBuffer | object;
+  size: number;
   timestamp: number;
-  data?: any;
+  version?: string;
+}
+
+export interface CacheStats {
+  totalSize: number;
+  modelCount: number;
+  materialCount: number;
+  textureCount: number;
 }
 
 // ============================================================================
-// Statistics & Debug
+// Streaming Types
 // ============================================================================
 
-/**
- * Streaming manager statistics
- */
-export interface StreamingStats {
-  // Counts
-  totalTextures: number;
-  unloaded: number;
-  queued: number;
-  loading: number;
-  partial: number;
-  loaded: number;
-  error: number;
+export type LoadPriority = 'critical' | 'high' | 'normal' | 'low' | 'background';
 
-  // Memory
-  memoryUsed: number;    // bytes
-  memoryLimit: number;   // bytes
-  memoryUsagePercent: number;
-
-  // Performance
-  activeLoads: number;
-  maxConcurrent: number;
-  averageLoadTime: number; // ms
-
-  // Categories
-  categoryStats: {
-    [K in TextureCategory]: {
-      count: number;
-      memoryUsed: number;
-      loaded: number;
-    };
-  };
-
-  // Priority distribution
-  priorityDistribution: {
-    high: number;    // priority > 500
-    medium: number;  // priority 100-500
-    low: number;     // priority < 100
-  };
-}
-
-/**
- * Individual texture debug info
- */
-export interface TextureDebugInfo {
+export interface LoadRequest {
   id: string;
-  url: string;
-  category: TextureCategory;
-  state: TextureState;
-
-  priority: number;
-  distance: number;
-
-  currentLod: number;
-  targetLod: number;
-  lodProgress: string; // "3/7 loaded"
-
-  memoryMB: string;
-  loadTime?: string;
-
-  lastUsed: string; // relative time
+  type: AssetType;
+  priority: LoadPriority;
+  distance?: number;
+  timestamp: number;
 }
 
-// ============================================================================
-// Priority Calculation
-// ============================================================================
-
-/**
- * Priority calculation context
- */
-export interface PriorityContext {
-  /** Camera position */
-  cameraPosition: pc.Vec3;
-
-  /** Current time */
-  now: number;
-
-  /** Category weights */
-  categoryWeights: Record<TextureCategory, number>;
-
-  /** Distance weight */
-  distanceWeight: number;
+export interface StreamingConfig {
+  /** Manifest URL */
+  manifestUrl: string;
+  /** Max memory for textures (MB) */
+  maxTextureMemoryMB: number;
+  /** Max memory for models (MB) */
+  maxModelMemoryMB: number;
+  /** Max concurrent downloads */
+  maxConcurrent: number;
+  /** Enable IndexedDB caching */
+  useIndexedDB: boolean;
+  /** Cache name for IndexedDB */
+  cacheName: string;
+  /** libktx module URL */
+  libktxModuleUrl: string;
+  /** libktx WASM URL */
+  libktxWasmUrl: string;
+  /** Enable debug logging */
+  debug: boolean;
 }
 
-/**
- * Priority calculation result
- */
-export interface PriorityResult {
-  priority: number;
-  distance: number;
-  distanceFactor: number;
-  categoryWeight: number;
-  userWeight: number;
+export const DEFAULT_STREAMING_CONFIG: StreamingConfig = {
+  manifestUrl: '',
+  maxTextureMemoryMB: 512,
+  maxModelMemoryMB: 256,
+  maxConcurrent: 4,
+  useIndexedDB: true,
+  cacheName: 'asset-streaming-cache',
+  libktxModuleUrl: '',
+  libktxWasmUrl: '',
+  debug: false,
+};
+
+// ============================================================================
+// Entity Scanning Types
+// ============================================================================
+
+export interface EntityAssetRefs {
+  /** Entity reference */
+  entityId: string;
+  entityPath: string;
+  /** Model ID if has render/model component */
+  modelId?: string;
+  /** Material IDs per mesh instance */
+  materialIds: string[];
+  /** Direct texture IDs (if not through material) */
+  textureIds: string[];
+}
+
+export interface TemplateAssetRefs {
+  templateId: string;
+  templateName: string;
+  entities: EntityAssetRefs[];
+  /** All unique asset IDs referenced */
+  allModels: string[];
+  allMaterials: string[];
+  allTextures: string[];
 }

@@ -1,38 +1,13 @@
 /**
- * Texture Streaming System - Public API
- *
- * Export all public components for easy import
+ * Streaming System - Main exports
  */
 
-// Main manager
-export { TextureStreamingManager } from './TextureStreamingManager';
+export { StreamingManager } from './StreamingManager';
+export { AssetManifest } from './AssetManifest';
+export { CacheManager } from './CacheManager';
 
-// Core components (for advanced usage)
-export { TextureHandle } from './TextureHandle';
-export { TextureRegistry } from './TextureRegistry';
-export { CategoryManager } from './CategoryManager';
-export { MemoryTracker } from './MemoryTracker';
-export { SimpleScheduler } from './SimpleScheduler';
-export { PriorityQueue } from './PriorityQueue';
+export { ModelLoader } from './loaders/ModelLoader';
+export { MaterialLoader } from './loaders/MaterialLoader';
+export { TextureLoader } from './loaders/TextureLoader';
 
-// Type definitions
-export type {
-  TextureCategory,
-  TextureState,
-  TextureMetadata,
-  TextureRegistration,
-  CategoryConfig,
-  StreamingManagerConfig,
-  StreamingStats,
-  TextureEventType,
-  TextureEvent,
-  TextureDebugInfo,
-  PriorityContext,
-  PriorityResult,
-} from './types';
-
-// Memory tracker types
-export type { MemoryStats } from './MemoryTracker';
-
-// Priority queue types
-export type { PriorityItem } from './PriorityQueue';
+export * from './types';
