@@ -266,20 +266,25 @@ export interface KtxApi {
  * Emscripten Module interface with cwrap support
  */
 export interface KtxModule {
-  // cwrap utilities
-  cwrap: (
-    funcName: string,
-    returnType: string | null,
-    argTypes: string[]
-  ) => (...args: any[]) => any;
+  // Direct exported C functions (no cwrap needed)
+  // All pointer/number args - called as module._funcName(args)
+  _malloc: (size: number) => number;
+  _free: (ptr: number) => void;
+  _ktxTexture2_CreateFromMemory: (dataPtr: number, dataSize: number, createFlags: number, outPtr: number) => number;
+  _ktxTexture2_Destroy: (handle: number) => void;
+  _ktxTexture2_TranscodeBasis: (handle: number, format: number, transcodeFlags: number) => number;
+  _ktxTexture2_NeedsTranscoding: (handle: number) => number;
+  _ktxErrorString: (error: number) => number; // returns char* pointer
+  _ktx_get_data: (handle: number) => number;
+  _ktx_get_data_size: (handle: number) => number;
+  _ktx_get_base_width: (handle: number) => number;
+  _ktx_get_base_height: (handle: number) => number;
+  _ktx_get_num_levels: (handle: number) => number;
+  _ktx_get_image_offset: (handle: number, level: number, layer: number, faceSlice: number) => number;
 
-  ccall: (
-    funcName: string,
-    returnType: string | null,
-    argTypes: string[],
-    args: any[]
-  ) => any;
-
+  // Memory helpers
+  HEAPU8: Uint8Array;
+  UTF8ToString: (ptr: number) => string;
   getValue: (ptr: number, type: string) => number;
   setValue: (ptr: number, value: number, type: string) => void;
 
