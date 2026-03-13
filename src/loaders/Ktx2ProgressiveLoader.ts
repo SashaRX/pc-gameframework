@@ -2197,7 +2197,7 @@ self.onmessage = async function(e) {
       height: probe.height,
       format: format,
       mipmaps: true,
-      levels: probe.levelCount,
+      numLevels: probe.levelCount,
       minFilter: pc.FILTER_LINEAR_MIPMAP_LINEAR,
       magFilter: pc.FILTER_LINEAR,
       addressU: pc.ADDRESS_REPEAT,
@@ -2360,9 +2360,7 @@ self.onmessage = async function(e) {
         }
 
         // Write data into the slot — engine will pick it up on next upload()
-        levels[level] = result.data instanceof Uint8Array
-          ? result.data
-          : new Uint8Array(result.data.buffer, result.data.byteOffset, result.data.byteLength);
+        levels[level] = result.data;
 
         // Push to GPU via PlayCanvas abstraction (calls wgpu.queue.writeTexture)
         // upload() only sends non-null slots so partial-level state is safe.
