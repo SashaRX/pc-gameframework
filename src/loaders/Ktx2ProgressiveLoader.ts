@@ -246,9 +246,12 @@ export class Ktx2ProgressiveLoader {
    */
   private createShaderChunk(): void {
     const device = this.app.graphicsDevice;
-    const chunks = (pc as any).ShaderChunks.get(device, (pc as any).SHADERLANGUAGE_GLSL);
 
-    chunks.set('diffusePS', `
+    // ----------------------------------------------------------------
+    // GLSL (WebGL2)
+    // ----------------------------------------------------------------
+    const glslChunks = (pc as any).ShaderChunks.get(device, 'glsl');
+    glslChunks.set('diffusePS', `
 // diffusePS — Progressive LOD with hardware anisotropic filtering
 uniform sampler2D texture_diffuseMap;
 uniform float material_minAvailableLod; // min LOD (best quality available)
@@ -304,7 +307,70 @@ void getAlbedo() {
 }
 `);
 
-    this.log(this.LOG_INFO, '[KTX2] Custom shader chunk registered');
+    this.log(this.LOG_INFO, '[KTX2] GLSL shader chunk registered');
+
+    // ----------------------------------------------------------------
+    // WGSL (WebGPU)
+    // In PlayCanvas, ShaderChunks.useWGSL = true when wgsl.size > 0,
+    // so registering here ensures WebGPU picks up our progressive LOD chunk.
+    // Differences vs GLSL:
+    //   - dFdx/dFdy  → dpdx/dpdy
+    //   - textureSize(sampler, lod)  → textureDimensions(texture, u32(lod))
+    //   - textureGrad(sampler, uv, dx, dy) → textureSampleGrad(tex, samp, uv, dx, dy)
+    //   - float → f32, vec2 → vec2f, vec3 → vec3f
+    //   - uniforms accessed via uniform.varname
+    // ----------------------------------------------------------------
+    try {
+      const wgslChunks = (pc as any).ShaderChunks.get(device, 'wgsl');
+      wgslChunks.set('diffusePS', `
+uniform material_diffuse: vec3f;
+uniform material_minAvailableLod: f32;
+uniform material_maxAvailableLod: f32;
+
+fn getAlbedo() {
+    dAlbedo = vec3f(1.0);
+    #ifdef STD_DIFFUSE_TEXTURE
+        var uv: vec2f = {STD_DIFFUSE_TEXTURE_UV};
+
+        // Partial derivatives in UV space
+        let dudx: vec2f = dpdx(uv);
+        let dudy: vec2f = dpdy(uv);
+
+        // Texture size at the best available mip — critical for progressive loading
+        let baseLod: u32 = u32(uniform.material_minAvailableLod);
+        let texSize: vec2f = vec2f(textureDimensions({STD_DIFFUSE_TEXTURE_NAME}, baseLod));
+
+        // Derivatives in texel space
+        let duvdx: vec2f = dudx * texSize;
+        let duvdy: vec2f = dudy * texSize;
+
+        // Minor axis LOD — prevents over-blurring at sharp angles
+        let minorAxis2: f32 = min(dot(duvdx, duvdx), dot(duvdy, duvdy));
+        let autoLod: f32 = 0.5 * log2(max(minorAxis2, 1e-8));
+
+        // Clamp to available mip range [minAvailableLod, maxAvailableLod]
+        let targetLod: f32 = clamp(autoLod,
+                                   uniform.material_minAvailableLod,
+                                   uniform.material_maxAvailableLod);
+
+        // Scale derivatives to stay within available mip range
+        let scale: f32 = exp2(targetLod - autoLod);
+
+        dAlbedo = textureSampleGrad(
+            {STD_DIFFUSE_TEXTURE_NAME},
+            {STD_DIFFUSE_TEXTURE_NAME}Sampler,
+            uv, dudx * scale, dudy * scale).rgb;
+    #endif
+
+    #ifdef STD_DIFFUSE_VERTEX
+        dAlbedo = dAlbedo * saturate3(vVertexColor.{STD_DIFFUSE_VERTEX_CHANNEL});
+    #endif
+}
+`);
+      this.log(this.LOG_INFO, '[KTX2] WGSL shader chunk registered');
+    } catch (e) {
+      this.logWarn('[KTX2] Failed to register WGSL shader chunk (non-fatal):', e);
+    }
   }
 
   /**
@@ -324,8 +390,10 @@ void getAlbedo() {
     }
 
     // Initialize GPU format detector
-    const gl = (this.app.graphicsDevice as any).gl as WebGL2RenderingContext | WebGLRenderingContext;
-    this.gpuFormatDetector = new GpuFormatDetector(gl);
+    // Pass graphicsDevice — works for both WebGL2 and WebGPU.
+    // GpuFormatDetector now reads device.ext* fields (same names on both backends).
+    const device = this.app.graphicsDevice;
+    this.gpuFormatDetector = new GpuFormatDetector(device);
 
     if (this.config.logLevel >= this.LOG_INFO) {
       this.gpuFormatDetector.logCapabilities();
@@ -2107,8 +2175,9 @@ self.onmessage = async function(e) {
     pixels.set(initData);
     texture.unlock();
 
-    if (!isCompressed) {
+    if (!isCompressed && !device.isWebGPU) {
       // RGBA path: Initialize all mipmap levels with full-size placeholder data
+      // WebGPU: skip — PlayCanvas manages mip init via its own texture abstraction.
       const glTexture = (texture as any).impl?._glTexture;
       if (gl && glTexture) {
         const prevBinding = gl.getParameter(gl.TEXTURE_BINDING_2D);
@@ -2151,9 +2220,10 @@ self.onmessage = async function(e) {
     }
 
     // Set WebGL parameters for mipmapping and filtering
-    const glTexture = (texture as any).impl?._glTexture;
+    // On WebGPU: skip direct gl API — PlayCanvas manages mip params via its own abstraction.
+    const glTexture = device.isWebGPU ? null : (texture as any).impl?._glTexture;
 
-    if (gl && glTexture) {
+    if (!device.isWebGPU && gl && glTexture) {
       const prevBinding = gl.getParameter(gl.TEXTURE_BINDING_2D);
       gl.bindTexture(gl.TEXTURE_2D, glTexture);
 
@@ -2206,10 +2276,18 @@ self.onmessage = async function(e) {
     }
 
     try {
-      // Get WebGL context
+      // Get graphics device
       const device = this.app.graphicsDevice;
-      const gl = (device as any).gl as WebGL2RenderingContext | null;
 
+      // WebGPU path: direct gl API not available.
+      // TODO: implement PlayCanvas-abstracted upload for WebGPU when the
+      // engine exposes a stable uploadCompressedMipLevel() API.
+      if (device.isWebGPU) {
+        this.logError('[KTX2] uploadMipLevel: WebGPU upload not yet implemented — skipping level', level);
+        return;
+      }
+
+      const gl = (device as any).gl as WebGL2RenderingContext | null;
       if (!gl) {
         this.logError('[KTX2] WebGL2 context not available');
         return;
