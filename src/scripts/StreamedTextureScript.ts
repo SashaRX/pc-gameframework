@@ -58,28 +58,32 @@ export class StreamedTextureScript extends Script {
   loadImmediately = false;
 
   private textureHandle: any = null;
+  private _onStreamingReady: ((manager: any) => void) | null = null;
 
   initialize() {
-    // Get streaming manager
-    const streaming = (this.app as any).streamingManager;
-
-    if (!streaming) {
-      console.error('[StreamedTexture] StreamingManager not found! Add StreamingManagerScript to scene first.');
-      return;
-    }
-
     if (!this.ktxUrl) {
       console.error('[StreamedTexture] ktxUrl is empty!');
       return;
     }
 
-    // Generate ID if not provided
-    const id = this.textureId || `${this.entity.name}-${this.entity.getGuid()}`;
+    const streaming = (this.app as any).streamingManager;
 
+    if (streaming) {
+      // StreamingManagerScript уже готов — регистрируемся сразу
+      this._register(streaming);
+    } else {
+      // Ещё не готов — подписываемся на событие
+      console.warn(`[StreamedTexture] StreamingManager not ready yet, waiting for "streaming:ready" event...`);
+      this._onStreamingReady = (manager: any) => this._register(manager);
+      this.app.once('streaming:ready', this._onStreamingReady);
+    }
+  }
+
+  private _register(streaming: any) {
+    const id = this.textureId || `${this.entity.name}-${this.entity.getGuid()}`;
     console.log(`[StreamedTexture] Registering "${id}" (${this.category})`);
 
     try {
-      // Register with streaming manager
       this.textureHandle = streaming.register({
         id: id,
         url: this.ktxUrl,
@@ -89,10 +93,12 @@ export class StreamedTextureScript extends Script {
         userPriority: this.userPriority,
       });
 
-      // Force load immediately if requested
       if (this.loadImmediately) {
-        streaming.requestLoad(id, 1000); // High priority
+        streaming.requestLoad(id, 1000);
       }
+
+      // Слушатель больше не нужен — очищаем
+      this._onStreamingReady = null;
 
       console.log(`[StreamedTexture] Registered "${id}" successfully`);
     } catch (error) {
@@ -134,7 +140,13 @@ export class StreamedTextureScript extends Script {
   }
 
   onDestroy() {
-    // Unregister from streaming manager
+    // Если ещё ждём события — отписываемся, чтобы не зарегистрироваться после destroy
+    if (this._onStreamingReady) {
+      this.app.off('streaming:ready', this._onStreamingReady);
+      this._onStreamingReady = null;
+    }
+
+    // Отменяем регистрацию текстуры
     const streaming = (this.app as any).streamingManager;
     if (streaming && this.textureHandle) {
       const id = this.textureId || `${this.entity.name}-${this.entity.getGuid()}`;

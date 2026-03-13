@@ -109,6 +109,9 @@ export class StreamingManagerScript extends Script {
 
       console.log('[StreamingManager] Ready!');
 
+      // Notify all scripts that were waiting for streaming manager
+      this.app.fire('streaming:ready', this.streamingManager);
+
       // Print stats every 5 seconds if debug enabled
       if (this.debugLogging) {
         this.statsInterval = window.setInterval(() => {
