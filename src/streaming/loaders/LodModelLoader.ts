@@ -202,11 +202,11 @@ export class LodModelLoader {
         });
       }
 
-      // Initialize meshopt if needed
-      await this.initMeshoptIfNeeded(arrayBuffer);
+      // Initialize meshopt decoder if GLB uses EXT_meshopt_compression
+      const meshoptDecoder = await this.initMeshoptIfNeeded(arrayBuffer);
 
-      // Parse GLB
-      const asset = await this.parseGLB(`${model.id}_lod${level}`, arrayBuffer);
+      // Parse GLB — passes decoder so processAsync hook decompresses bufferViews
+      const asset = await this.parseGLB(`${model.id}_lod${level}`, arrayBuffer, meshoptDecoder);
 
       lodLevel.asset = asset;
       lodLevel.resource = asset.resource;
@@ -343,31 +343,115 @@ export class LodModelLoader {
   // Utility Methods
   // ============================================================================
 
-  private async initMeshoptIfNeeded(arrayBuffer: ArrayBuffer): Promise<void> {
-    const hasMeshopt = this.checkForMeshoptExtension(arrayBuffer);
-    if (hasMeshopt) {
-      const meshoptLoader = MeshoptLoader.getInstance();
-      await meshoptLoader.initialize(this.app, this.debug);
-    }
-  }
-
-  private checkForMeshoptExtension(arrayBuffer: ArrayBuffer): boolean {
+  /**
+   * Quick scan for EXT_meshopt_compression in GLB JSON chunk.
+   * Returns parsed glTF JSON if extension is present, null otherwise.
+   * Returning the parsed JSON avoids double-parsing later.
+   */
+  private checkForMeshoptExtension(arrayBuffer: ArrayBuffer): object | null {
     try {
       const view = new DataView(arrayBuffer);
-      const magic = view.getUint32(0, true);
-      if (magic !== 0x46546c67) return false; // 'glTF'
-
+      if (view.getUint32(0, true) !== 0x46546c67) return null; // 'glTF' magic
       const jsonLength = view.getUint32(12, true);
-      const jsonBytes = new Uint8Array(arrayBuffer, 20, jsonLength);
-      const jsonStr = new TextDecoder().decode(jsonBytes);
-
-      return jsonStr.includes('EXT_meshopt_compression');
+      const jsonStr = new TextDecoder().decode(new Uint8Array(arrayBuffer, 20, jsonLength));
+      if (!jsonStr.includes('EXT_meshopt_compression')) return null;
+      return JSON.parse(jsonStr);
     } catch {
-      return false;
+      return null;
     }
   }
 
-  private parseGLB(name: string, arrayBuffer: ArrayBuffer): Promise<pc.Asset> {
+  /**
+   * Initialize MeshoptDecoder if GLB uses EXT_meshopt_compression.
+   * Returns the decoder instance if needed, null otherwise.
+   */
+  private async initMeshoptIfNeeded(arrayBuffer: ArrayBuffer): Promise<import('../../libs/meshoptimizer/MeshoptLoader').MeshoptDecoder | null> {
+    const gltf = this.checkForMeshoptExtension(arrayBuffer);
+    if (!gltf) return null;
+
+    const meshoptLoader = MeshoptLoader.getInstance();
+    const decoder = await meshoptLoader.initialize(this.app, this.debug);
+
+    this.log('EXT_meshopt_compression detected — decoder ready, SIMD:', decoder.supported);
+    return decoder;
+  }
+
+  /**
+   * Build a bufferView.processAsync callback for PlayCanvas GlbParser.
+   *
+   * GlbParser calls this for every bufferView with signature:
+   *   processAsync(gltfBufferView, buffers, callback(err, Uint8Array | null))
+   *
+   * If the bufferView has EXT_meshopt_compression extension we:
+   *   1. Resolve the compressed source buffer (the extension's own buffer index)
+   *   2. Slice out the compressed bytes
+   *   3. Allocate output buffer: count * byteStride
+   *   4. Call decoder.decodeGltfBuffer() synchronously (WASM is ready by this point)
+   *   5. Return decoded Uint8Array — GlbParser will use it in place of raw data
+   *
+   * Returning null from callback falls through to the default path (raw slice).
+   *
+   * Spec ref: https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Vendor/EXT_meshopt_compression
+   */
+  private buildMeshoptBufferViewHook(
+    decoder: import('../../libs/meshoptimizer/MeshoptLoader').MeshoptDecoder,
+    glbBinaryChunk: Uint8Array,
+    gltfBuffers: Array<{ byteOffset: number; byteLength: number; uri?: string }>
+  ): (gltfBufferView: any, buffers: Promise<Uint8Array>[], cb: (err: Error | null, result: Uint8Array | null) => void) => void {
+
+    return (gltfBufferView: any, _buffers: Promise<Uint8Array>[], cb) => {
+      const ext = gltfBufferView?.extensions?.EXT_meshopt_compression;
+      if (!ext) {
+        cb(null, null); // not compressed — use default path
+        return;
+      }
+
+      try {
+        // Compressed data lives in ext.buffer (may differ from the parent bufferView.buffer)
+        // For GLB the binary chunk is buffer index 0 with no URI
+        const srcBuf = gltfBuffers[ext.buffer];
+        const srcOffset = (srcBuf?.byteOffset ?? 0) + (ext.byteOffset ?? 0);
+        const source = glbBinaryChunk.subarray(srcOffset, srcOffset + ext.byteLength);
+
+        const count: number      = ext.count;
+        const byteStride: number = ext.byteStride;
+        const mode: string       = ext.mode   ?? 'ATTRIBUTES';
+        const filter: string     = ext.filter ?? 'NONE';
+
+        const target = new Uint8Array(count * byteStride);
+
+        // decodeGltfBuffer is synchronous — WASM decoder is fully initialised
+        decoder.decodeGltfBuffer(target, count, byteStride, source, mode as any, filter as any);
+
+        // Propagate byteStride so GlbParser sees it (same as default path does for non-compressed)
+        (target as any).byteStride = byteStride;
+
+        this.log(`meshopt: decoded bufferView — mode=${mode} filter=${filter} count=${count} stride=${byteStride} → ${target.byteLength}B`);
+
+        cb(null, target);
+      } catch (err: any) {
+        cb(new Error(`[LodModelLoader] meshopt decode failed: ${err.message ?? err}`), null);
+      }
+    };
+  }
+
+  /**
+   * Parse GLB ArrayBuffer into a PlayCanvas container Asset.
+   *
+   * If a meshoptDecoder is provided the asset.options.bufferView.processAsync
+   * hook is installed so GlbParser decompresses every meshopt bufferView before
+   * building vertex / index buffers.  This is the correct integration point —
+   * PlayCanvas calls the hook for every bufferView before any geometry is built.
+   *
+   * KHR_mesh_quantization requires no special handling: PlayCanvas reads accessor
+   * types (INT8/UINT8/INT16/UINT16) natively and the normalized flag is respected
+   * by the vertex format builder.
+   */
+  private parseGLB(
+    name: string,
+    arrayBuffer: ArrayBuffer,
+    decoder?: import('../../libs/meshoptimizer/MeshoptLoader').MeshoptDecoder | null
+  ): Promise<pc.Asset> {
     return new Promise((resolve, reject) => {
       const blob = new Blob([arrayBuffer], { type: 'model/gltf-binary' });
       const blobUrl = URL.createObjectURL(blob);
@@ -385,6 +469,48 @@ export class LodModelLoader {
         url: blobUrl,
         filename: `${name}.glb`,
       }) as pc.Asset;
+
+      // ---- meshopt hook ----
+      // Installed only when the GLB uses EXT_meshopt_compression.
+      // GlbParser passes options.bufferView.processAsync(gltfBufView, buffers, cb)
+      // for every bufferView, giving us the chance to decompress before geometry build.
+      if (decoder) {
+        // Extract GLB header fields needed to locate the binary chunk and buffers.
+        // GLB layout: [header 12B][JSON chunk][BIN chunk]
+        //   Chunk header: length(4) + type(4)  (type 0x4E4F534A=JSON, 0x004E4942=BIN)
+        const dv = new DataView(arrayBuffer);
+        const jsonChunkLength = dv.getUint32(12, true);
+        // BIN chunk starts right after JSON chunk header (8B) + JSON data
+        const binChunkDataOffset = 12 + 8 + jsonChunkLength; // skip JSON chunkLen+type+data
+        const binChunkLength = binChunkDataOffset < arrayBuffer.byteLength
+          ? dv.getUint32(binChunkDataOffset - 8 + jsonChunkLength + 8, true)
+          : 0;
+
+        // Recalculate correctly:
+        // offset 0: magic(4) + version(4) + totalLength(4) = 12
+        // offset 12: jsonChunkLen(4) + jsonChunkType(4) + jsonData(jsonChunkLen)
+        // offset 12+8+jsonChunkLen: binChunkLen(4) + binChunkType(4) + binData
+        const binOffset = 12 + 8 + jsonChunkLength; // = start of BIN chunk header
+        const glbBinaryChunk = new Uint8Array(
+          arrayBuffer,
+          binOffset + 8, // skip BIN chunk header
+          dv.getUint32(binOffset, true)
+        );
+
+        // Parse gltf.buffers from JSON chunk to get byteOffset mapping
+        const jsonStr = new TextDecoder().decode(new Uint8Array(arrayBuffer, 20, jsonChunkLength));
+        const gltf = JSON.parse(jsonStr);
+        const gltfBuffers: Array<{ byteOffset: number; byteLength: number; uri?: string }> =
+          (gltf.buffers ?? []).map((_b: any, _i: number) => ({
+            byteOffset: 0,       // GLB binary chunk always starts at offset 0
+            byteLength: _b.byteLength,
+            uri: _b.uri,
+          }));
+
+        const processAsync = this.buildMeshoptBufferViewHook(decoder, glbBinaryChunk, gltfBuffers);
+        (asset as any).options = { bufferView: { processAsync } };
+      }
+      // ---- end meshopt hook ----
 
       asset.on('load', () => {
         URL.revokeObjectURL(blobUrl);
