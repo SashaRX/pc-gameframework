@@ -227,9 +227,11 @@ export class MaterialInstanceLoader {
     for (const [key, value] of Object.entries(params)) {
       if (key in material) {
         try {
-          // Handle color arrays
-          if (Array.isArray(value) && value.length === 3 && key.toLowerCase().includes('color') ||
-              ['diffuse', 'specular', 'emissive'].includes(key)) {
+          // Handle color arrays — explicit parentheses to prevent operator-precedence bug
+          // Condition: value is [r,g,b] AND key is a color-type property
+          if ((Array.isArray(value) && value.length >= 3) &&
+              (key.toLowerCase().includes('color') ||
+               ['diffuse', 'specular', 'emissive'].includes(key))) {
             const Color = (globalThis as any).pc?.Color;
             if (Color) {
               (material as any)[key] = new Color(value[0], value[1], value[2]);
