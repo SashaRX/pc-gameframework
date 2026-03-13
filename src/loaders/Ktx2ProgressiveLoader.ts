@@ -605,7 +605,11 @@ fn getAlbedo() {
     this.log(this.LOG_INFO, `[KTX2] Selected transcode format: ${transcodeConfig.format} (compressed=${transcodeConfig.isCompressed})`);
 
     // 5. Create texture with correct format
-    const texture = this.createTexture(probe, transcodeConfig.isCompressed);
+    const texture = this.createTexture(
+      probe,
+      transcodeConfig.isCompressed,
+      this.getTextureFormatFromTranscodeFormat(transcodeConfig.format)
+    );
 
     // 6. Progressive loading loop
     // Load from lowest quality (highest mip index) to highest quality (mip 0)
@@ -2140,20 +2144,60 @@ self.onmessage = async function(e) {
     return fullKtx;
   }
 
-  private createTexture(probe: Ktx2ProbeResult, isCompressed: boolean): pc.Texture {
+  /**
+   * Map TextureFormat → pc PIXELFORMAT numeric constant.
+   * Used on WebGPU where the texture must be created with the correct
+   * compressed format from the start (cannot switch format post-creation).
+   *
+   * PIXELFORMAT_* numeric values (from PlayCanvas constants.js):
+   *   DXT1=8, DXT5=10, ASTC_4x4=28, ETC1=21, ETC2_RGB=22, ETC2_RGBA=23
+   *   PVRTC_4BPP_RGB=26, PVRTC_4BPP_RGBA=27, BC7=67, BC7_SRGBA=68
+   *   DXT1_SRGB=54, DXT5_SRGBA=56, ASTC_4x4_SRGB=63, ETC2_SRGB=61, ETC2_SRGBA=62
+   *   RGBA8=7, SRGBA8=20
+   */
+  private textureFormatToPixelFormat(format: TextureFormat, isSrgb: boolean): number {
+    switch (format) {
+      case TextureFormat.BC1_RGB:
+      case TextureFormat.BC1_RGBA:   return isSrgb ? 54 : 8;   // DXT1 / DXT1_SRGB
+      case TextureFormat.BC3_RGBA:   return isSrgb ? 56 : 10;  // DXT5 / DXT5_SRGBA
+      case TextureFormat.BC7_RGBA:   return isSrgb ? 68 : 67;  // BC7 / BC7_SRGBA
+      case TextureFormat.ETC1_RGB:   return 21;                  // ETC1 (no sRGB variant)
+      case TextureFormat.ETC2_RGB:   return isSrgb ? 61 : 22;  // ETC2_RGB / ETC2_SRGB
+      case TextureFormat.ETC2_RGBA:
+      case TextureFormat.ETC2_RGBA1: return isSrgb ? 62 : 23;  // ETC2_RGBA / ETC2_SRGBA
+      case TextureFormat.ASTC_4x4:   return isSrgb ? 63 : 28;  // ASTC_4x4 / ASTC_4x4_SRGB
+      case TextureFormat.PVRTC1_4_RGB:  return 26;
+      case TextureFormat.PVRTC1_4_RGBA: return 27;
+      case TextureFormat.SRGB8_ALPHA8:  return 20;              // SRGBA8
+      default:                          return isSrgb ? 20 : 7; // RGBA8 / SRGBA8
+    }
+  }
+
+  private createTexture(probe: Ktx2ProbeResult, isCompressed: boolean, textureFormat?: TextureFormat): pc.Texture {
     // Determine pixel format based on colorspace
     // In PlayCanvas 2.x, color textures (diffuse, albedo, etc) should use sRGB formats
     // Linear formats are used for data textures (normal maps, roughness, etc)
     const useSrgb = this.config.isSrgb || probe.colorSpace?.isSrgb;
-    // Note: Using numeric constants directly as the named exports may not be available
-    // PIXELFORMAT_RGBA8 = 7, PIXELFORMAT_SRGBA8 = 20
-    const format = useSrgb ? 20 : 7;
+
+    const device = this.app.graphicsDevice;
+
+    // On WebGPU, the texture MUST be created with the exact compressed PIXELFORMAT upfront —
+    // unlike WebGL we cannot switch format post-creation via compressedTexImage2D.
+    // On WebGL we always start with RGBA8/SRGBA8 and replace via direct gl API.
+    let format: number;
+    if (device.isWebGPU && isCompressed && textureFormat) {
+      format = this.textureFormatToPixelFormat(textureFormat, !!useSrgb);
+    } else {
+      // PIXELFORMAT_RGBA8 = 7, PIXELFORMAT_SRGBA8 = 20
+      format = useSrgb ? 20 : 7;
+    }
 
     const texture = new pc.Texture(this.app.graphicsDevice, {
       width: probe.width,
       height: probe.height,
       format: format,
       mipmaps: true,
+      levels: probe.levelCount,
       minFilter: pc.FILTER_LINEAR_MIPMAP_LINEAR,
       magFilter: pc.FILTER_LINEAR,
       addressU: pc.ADDRESS_REPEAT,
@@ -2162,18 +2206,28 @@ self.onmessage = async function(e) {
 
     texture.name = `ktx2_${probe.url.split('/').pop()}`;
 
-    // Initialize texture data
-    // For both RGBA and compressed: we create a minimal 1x1 RGBA texture first
-    // This ensures PlayCanvas creates the WebGL texture properly
-    // For compressed textures, we'll replace all levels with compressed data
-    const device = this.app.graphicsDevice;
     const gl = (device as any).gl as WebGL2RenderingContext | null;
 
-    // Create minimal 1x1 RGBA texture to initialize PlayCanvas texture system
-    const initData = new Uint8Array([128, 128, 128, 255]); // 1x1 gray pixel
-    const pixels = texture.lock();
-    pixels.set(initData);
-    texture.unlock();
+    if (device.isWebGPU) {
+      // WebGPU path: initialize _levels as array of nulls (length = levelCount).
+      // PlayCanvas WebGPU uploader skips null slots — exactly what we need for
+      // progressive loading where levels arrive one by one.
+      // DO NOT call lock()/unlock() — that writes RGBA8 data which conflicts
+      // with the compressed format we set above.
+      (texture as any)._levels = new Array(probe.levelCount).fill(null);
+      this.log(this.LOG_VERBOSE,
+        `[KTX2] WebGPU: created texture format=${format} levels=${probe.levelCount} ` +
+        `(compressed=${isCompressed})`
+      );
+    } else {
+      // WebGL path: create minimal 1x1 RGBA placeholder so PlayCanvas initializes
+      // the GL texture object. Compressed levels will be uploaded later via
+      // gl.compressedTexImage2D bypassing PlayCanvas format tracking.
+      const initData = new Uint8Array([128, 128, 128, 255]); // 1x1 gray pixel
+      const pixels = texture.lock();
+      pixels.set(initData);
+      texture.unlock();
+    }
 
     if (!isCompressed && !device.isWebGPU) {
       // RGBA path: Initialize all mipmap levels with full-size placeholder data
@@ -2247,7 +2301,9 @@ self.onmessage = async function(e) {
       gl.bindTexture(gl.TEXTURE_2D, prevBinding);
     }
 
-    this.log(this.LOG_INFO, `[KTX2] Created texture with format: ${useSrgb ? 'SRGBA8' : 'RGBA8'} (compressed=${isCompressed})`);
+    this.log(this.LOG_INFO,
+      `[KTX2] Created texture: format=${format} srgb=${!!useSrgb} compressed=${isCompressed} ` +
+      `levels=${probe.levelCount} ${probe.width}x${probe.height}`);
 
     return texture;
   }
@@ -2279,11 +2335,60 @@ self.onmessage = async function(e) {
       // Get graphics device
       const device = this.app.graphicsDevice;
 
-      // WebGPU path: direct gl API not available.
-      // TODO: implement PlayCanvas-abstracted upload for WebGPU when the
-      // engine exposes a stable uploadCompressedMipLevel() API.
+      // ----------------------------------------------------------------
+      // WebGPU path
+      // ----------------------------------------------------------------
+      // PlayCanvas WebGPU backend (webgpu-texture.js uploadTypedArrayData)
+      // reads texture._levels[] and calls wgpu.queue.writeTexture() for each
+      // non-null TypedArray slot. LOD window is controlled via TextureView
+      // (baseMipLevel + mipLevelCount) passed to setParameter — the WebGPU
+      // bind group handles it transparently (webgpu-bind-group.js line 92+).
+      //
+      // Constraints from engine source:
+      //   • texture must have been created with the correct compressed PIXELFORMAT
+      //     (done in createTexture above — textureFormatToPixelFormat)
+      //   • _levels[] must have length == numLevels, null slots are skipped
+      //   • texture.upload() must NOT be called inside a render pass
+      //     (engine asserts this in webgpu-texture.js uploadImmediate)
+      //   • TextureView is only honoured on WebGPU, ignored on WebGL
       if (device.isWebGPU) {
-        this.logError('[KTX2] uploadMipLevel: WebGPU upload not yet implemented — skipping level', level);
+        const levels = (texture as any)._levels as (Uint8Array | null)[];
+
+        if (!levels || level >= levels.length) {
+          this.logError(`[KTX2] WebGPU: _levels not initialised or level ${level} out of range`);
+          return;
+        }
+
+        // Write data into the slot — engine will pick it up on next upload()
+        levels[level] = result.data instanceof Uint8Array
+          ? result.data
+          : new Uint8Array(result.data.buffer, result.data.byteOffset, result.data.byteLength);
+
+        // Push to GPU via PlayCanvas abstraction (calls wgpu.queue.writeTexture)
+        // upload() only sends non-null slots so partial-level state is safe.
+        texture.upload();
+
+        // LOD window: expose only levels [minAvailableLod .. maxAvailableLod].
+        // TextureView with baseMipLevel + mipLevelCount replaces gl.TEXTURE_BASE_LEVEL / MAX_LEVEL.
+        const customMaterial = (this as any)._customMaterial;
+        if (customMaterial && typeof (texture as any).getView === 'function') {
+          const mipCount = maxAvailableLod - minAvailableLod + 1;
+          const view = (texture as any).getView(minAvailableLod, mipCount);
+          customMaterial.setParameter('texture_diffuseMap', view);
+          customMaterial.setParameter('material_minAvailableLod', minAvailableLod);
+          customMaterial.setParameter('material_maxAvailableLod', maxAvailableLod);
+          this.log(this.LOG_VERBOSE,
+            `[KTX2] WebGPU: uploaded level ${level} via TextureView ` +
+            `[${minAvailableLod}..${maxAvailableLod}] ${result.width}x${result.height} ` +
+            `(${(result.data.byteLength / 1024).toFixed(2)} KB)`
+          );
+        } else {
+          // Material not yet bound — just log, uniforms will sync later
+          this.log(this.LOG_VERBOSE,
+            `[KTX2] WebGPU: uploaded level ${level} ${result.width}x${result.height} ` +
+            `(${(result.data.byteLength / 1024).toFixed(2)} KB)`
+          );
+        }
         return;
       }
 
