@@ -1,6 +1,7 @@
 /**
  * GPU Format Detector
- * Detects supported compressed texture formats for the current platform
+ * Detects supported compressed texture formats for the current platform.
+ * Supports both WebGL2 and WebGPU devices.
  */
 
 export interface GpuCapabilities {
@@ -55,23 +56,67 @@ export enum TextureFormat {
   SRGB8_ALPHA8 = 'SRGB8_ALPHA8', // Uncompressed sRGB
 }
 
-export class GpuFormatDetector {
-  private gl: WebGLRenderingContext | WebGL2RenderingContext;
-  private capabilities: GpuCapabilities;
+// Cached WebGL extension format constants
+interface CachedExtFormats {
+  // S3TC
+  COMPRESSED_RGB_S3TC_DXT1_EXT?: number;
+  COMPRESSED_RGBA_S3TC_DXT1_EXT?: number;
+  COMPRESSED_RGBA_S3TC_DXT5_EXT?: number;
+  // RGTC
+  COMPRESSED_RED_RGTC1_EXT?: number;
+  COMPRESSED_RED_GREEN_RGTC2_EXT?: number;
+  // BPTC (BC7)
+  COMPRESSED_RGBA_BPTC_UNORM_EXT?: number;
+  // ETC1
+  COMPRESSED_RGB_ETC1_WEBGL?: number;
+  // ETC2
+  COMPRESSED_RGB8_ETC2?: number;
+  COMPRESSED_RGBA8_ETC2_EAC?: number;
+  COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2?: number;
+  // ASTC
+  COMPRESSED_RGBA_ASTC_4x4_KHR?: number;
+  COMPRESSED_RGBA_ASTC_6x6_KHR?: number;
+  COMPRESSED_RGBA_ASTC_8x8_KHR?: number;
+  // PVRTC
+  COMPRESSED_RGB_PVRTC_4BPPV1_IMG?: number;
+  COMPRESSED_RGBA_PVRTC_4BPPV1_IMG?: number;
+  // WebGL base
+  RGBA?: number;
+  SRGB8_ALPHA8?: number;
+}
 
-  constructor(gl: WebGLRenderingContext | WebGL2RenderingContext) {
-    this.gl = gl;
-    this.capabilities = this.detectCapabilities();
-  }
+export class GpuFormatDetector {
+  private gl: WebGLRenderingContext | WebGL2RenderingContext | null;
+  private isWebGpu: boolean;
+  private capabilities: GpuCapabilities;
+  /** Extension format constants cached at construction time */
+  private extFormats: CachedExtFormats = {};
 
   /**
-   * Detect all supported compressed texture formats
+   * @param gl WebGL context, or null when running on a WebGPU device.
    */
-  private detectCapabilities(): GpuCapabilities {
-    const gl = this.gl;
+  constructor(gl: WebGLRenderingContext | WebGL2RenderingContext | null) {
+    this.gl = gl;
+    this.isWebGpu = (gl === null || gl === undefined);
+    this.capabilities = this.isWebGpu
+      ? this.detectWebGpuCapabilities()
+      : this.detectWebGlCapabilities();
 
+    if (!this.isWebGpu && gl) {
+      this.cacheExtFormats(gl);
+    }
+  }
+
+  // ============================================================================
+  // Capability Detection
+  // ============================================================================
+
+  /**
+   * Detect capabilities via WebGL extensions.
+   */
+  private detectWebGlCapabilities(): GpuCapabilities {
+    const gl = this.gl!;
     return {
-      // Desktop formats
       s3tc: !!gl.getExtension('WEBGL_compressed_texture_s3tc') ||
             !!gl.getExtension('WEBKIT_WEBGL_compressed_texture_s3tc') ||
             !!gl.getExtension('MOZ_WEBGL_compressed_texture_s3tc'),
@@ -82,7 +127,6 @@ export class GpuFormatDetector {
 
       rgtc: !!gl.getExtension('EXT_texture_compression_rgtc'),
 
-      // Mobile formats
       etc1: !!gl.getExtension('WEBGL_compressed_texture_etc1'),
 
       etc: !!gl.getExtension('WEBGL_compressed_texture_etc'),
@@ -93,198 +137,166 @@ export class GpuFormatDetector {
       pvrtc: !!gl.getExtension('WEBGL_compressed_texture_pvrtc') ||
              !!gl.getExtension('WEBKIT_WEBGL_compressed_texture_pvrtc'),
 
-      // Always supported
       uncompressed: true,
     };
   }
 
   /**
-   * Get detected capabilities
+   * Conservative WebGPU capabilities.
+   * WebGPU supports BC and ETC2/ASTC on modern hardware; PVRTC is unavailable.
+   * We expose a safe set that matches Tier-2 desktop + modern mobile.
    */
-  getCapabilities(): GpuCapabilities {
-    return { ...this.capabilities };
+  private detectWebGpuCapabilities(): GpuCapabilities {
+    return {
+      s3tc:       true,   // BC1-BC3 — universally supported on desktop
+      s3tc_srgb:  true,
+      bptc:       true,   // BC7 — supported on all WebGPU-capable desktop GPUs
+      rgtc:       true,   // BC4/BC5
+      etc1:       false,  // ETC1 not in WebGPU spec
+      etc:        true,   // ETC2 — mandatory in WebGPU on mobile
+      astc:       true,   // ASTC — mandatory on modern mobile
+      pvrtc:      false,  // PVRTC not in WebGPU spec
+      uncompressed: true,
+    };
   }
 
   /**
-   * Check if specific format is supported
+   * Cache all extension format enum values at init time.
+   * Avoids repeated getExtension() calls in hot paths.
    */
-  isSupported(format: TextureFormat): boolean {
-    switch (format) {
-      // BC formats
-      case TextureFormat.BC1_RGB:
-      case TextureFormat.BC1_RGBA:
-      case TextureFormat.BC3_RGBA:
-        return this.capabilities.s3tc;
-
-      case TextureFormat.BC4_R:
-      case TextureFormat.BC5_RG:
-        return this.capabilities.rgtc;
-
-      case TextureFormat.BC6H_RGB_UF:
-      case TextureFormat.BC7_RGBA:
-        return this.capabilities.bptc;
-
-      // ETC formats
-      case TextureFormat.ETC1_RGB:
-        return this.capabilities.etc1;
-
-      case TextureFormat.ETC2_RGB:
-      case TextureFormat.ETC2_RGBA:
-      case TextureFormat.ETC2_RGBA1:
-      case TextureFormat.EAC_R11:
-      case TextureFormat.EAC_RG11:
-        return this.capabilities.etc;
-
-      // ASTC formats
-      case TextureFormat.ASTC_4x4:
-      case TextureFormat.ASTC_5x5:
-      case TextureFormat.ASTC_6x6:
-      case TextureFormat.ASTC_8x8:
-        return this.capabilities.astc;
-
-      // PVRTC formats
-      case TextureFormat.PVRTC1_4_RGB:
-      case TextureFormat.PVRTC1_4_RGBA:
-      case TextureFormat.PVRTC1_2_RGB:
-      case TextureFormat.PVRTC1_2_RGBA:
-        return this.capabilities.pvrtc;
-
-      // Fallback
-      case TextureFormat.RGBA8:
-      case TextureFormat.SRGB8_ALPHA8:
-        return true;
-
-      default:
-        return false;
-    }
-  }
-
-  /**
-   * Get best format for current platform
-   * Priority: ASTC > BC7 > ETC2 > BC3 > ETC1 > PVRTC > RGBA
-   */
-  getBestFormat(hasAlpha: boolean, isSrgb: boolean): TextureFormat {
-    // Modern mobile - ASTC (best quality/compression ratio)
-    if (this.capabilities.astc) {
-      return TextureFormat.ASTC_4x4; // 8bpp, best quality
-    }
-
-    // Modern desktop - BC7 (best quality)
-    if (this.capabilities.bptc) {
-      return TextureFormat.BC7_RGBA;
-    }
-
-    // Modern mobile/iOS - ETC2
-    if (this.capabilities.etc) {
-      return hasAlpha ? TextureFormat.ETC2_RGBA : TextureFormat.ETC2_RGB;
-    }
-
-    // Desktop - BC1/BC3 (DXT1/DXT5)
-    if (this.capabilities.s3tc) {
-      return hasAlpha ? TextureFormat.BC3_RGBA : TextureFormat.BC1_RGB;
-    }
-
-    // Legacy Android - ETC1 (no alpha support)
-    if (this.capabilities.etc1 && !hasAlpha) {
-      return TextureFormat.ETC1_RGB;
-    }
-
-    // Legacy iOS - PVRTC
-    if (this.capabilities.pvrtc) {
-      return hasAlpha ? TextureFormat.PVRTC1_4_RGBA : TextureFormat.PVRTC1_4_RGB;
-    }
-
-    // Fallback to uncompressed
-    return isSrgb ? TextureFormat.SRGB8_ALPHA8 : TextureFormat.RGBA8;
-  }
-
-  /**
-   * Get WebGL internal format constant for texture format
-   */
-  getInternalFormat(format: TextureFormat): number {
-    const gl = this.gl;
-
-    // Get extensions
+  private cacheExtFormats(gl: WebGLRenderingContext | WebGL2RenderingContext): void {
     const s3tc = gl.getExtension('WEBGL_compressed_texture_s3tc');
-    const etc = gl.getExtension('WEBGL_compressed_texture_etc');
+    const s3tcSrgb = gl.getExtension('WEBGL_compressed_texture_s3tc_srgb');
+    const rgtc = gl.getExtension('EXT_texture_compression_rgtc');
+    const bptc = gl.getExtension('EXT_texture_compression_bptc');
+    const etc1 = gl.getExtension('WEBGL_compressed_texture_etc1');
+    const etc  = gl.getExtension('WEBGL_compressed_texture_etc');
     const astc = gl.getExtension('WEBGL_compressed_texture_astc') ||
                  gl.getExtension('WEBKIT_WEBGL_compressed_texture_astc');
     const pvrtc = gl.getExtension('WEBGL_compressed_texture_pvrtc') ||
                   gl.getExtension('WEBKIT_WEBGL_compressed_texture_pvrtc');
-    const rgtc = gl.getExtension('EXT_texture_compression_rgtc');
-    const bptc = gl.getExtension('EXT_texture_compression_bptc');
 
+    this.extFormats = {
+      COMPRESSED_RGB_S3TC_DXT1_EXT:          (s3tc as any)?.COMPRESSED_RGB_S3TC_DXT1_EXT,
+      COMPRESSED_RGBA_S3TC_DXT1_EXT:         (s3tc as any)?.COMPRESSED_RGBA_S3TC_DXT1_EXT,
+      COMPRESSED_RGBA_S3TC_DXT5_EXT:         (s3tc as any)?.COMPRESSED_RGBA_S3TC_DXT5_EXT,
+      COMPRESSED_RED_RGTC1_EXT:              (rgtc as any)?.COMPRESSED_RED_RGTC1_EXT,
+      COMPRESSED_RED_GREEN_RGTC2_EXT:        (rgtc as any)?.COMPRESSED_RED_GREEN_RGTC2_EXT,
+      COMPRESSED_RGBA_BPTC_UNORM_EXT:        (bptc as any)?.COMPRESSED_RGBA_BPTC_UNORM_EXT,
+      COMPRESSED_RGB_ETC1_WEBGL:             (etc1 as any)?.COMPRESSED_RGB_ETC1_WEBGL,
+      COMPRESSED_RGB8_ETC2:                  (etc as any)?.COMPRESSED_RGB8_ETC2,
+      COMPRESSED_RGBA8_ETC2_EAC:             (etc as any)?.COMPRESSED_RGBA8_ETC2_EAC,
+      COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2: (etc as any)?.COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2,
+      COMPRESSED_RGBA_ASTC_4x4_KHR:          (astc as any)?.COMPRESSED_RGBA_ASTC_4x4_KHR,
+      COMPRESSED_RGBA_ASTC_6x6_KHR:          (astc as any)?.COMPRESSED_RGBA_ASTC_6x6_KHR,
+      COMPRESSED_RGBA_ASTC_8x8_KHR:          (astc as any)?.COMPRESSED_RGBA_ASTC_8x8_KHR,
+      COMPRESSED_RGB_PVRTC_4BPPV1_IMG:       (pvrtc as any)?.COMPRESSED_RGB_PVRTC_4BPPV1_IMG,
+      COMPRESSED_RGBA_PVRTC_4BPPV1_IMG:      (pvrtc as any)?.COMPRESSED_RGBA_PVRTC_4BPPV1_IMG,
+      RGBA:           gl.RGBA,
+      SRGB8_ALPHA8:   (gl as WebGL2RenderingContext).SRGB8_ALPHA8 ?? gl.RGBA,
+    };
+  }
+
+  // ============================================================================
+  // Public API
+  // ============================================================================
+
+  getCapabilities(): GpuCapabilities {
+    return { ...this.capabilities };
+  }
+
+  isWebGpuDevice(): boolean {
+    return this.isWebGpu;
+  }
+
+  isSupported(format: TextureFormat): boolean {
     switch (format) {
-      // BC formats
       case TextureFormat.BC1_RGB:
-        return s3tc?.COMPRESSED_RGB_S3TC_DXT1_EXT ?? 0;
       case TextureFormat.BC1_RGBA:
-        return s3tc?.COMPRESSED_RGBA_S3TC_DXT1_EXT ?? 0;
-      case TextureFormat.BC3_RGBA:
-        return s3tc?.COMPRESSED_RGBA_S3TC_DXT5_EXT ?? 0;
+      case TextureFormat.BC3_RGBA:    return this.capabilities.s3tc;
       case TextureFormat.BC4_R:
-        return rgtc?.COMPRESSED_RED_RGTC1_EXT ?? 0;
-      case TextureFormat.BC5_RG:
-        return rgtc?.COMPRESSED_RED_GREEN_RGTC2_EXT ?? 0;
-      case TextureFormat.BC7_RGBA:
-        return bptc?.COMPRESSED_RGBA_BPTC_UNORM_EXT ?? 0;
-
-      // ETC formats
-      case TextureFormat.ETC1_RGB:
-        return (gl.getExtension('WEBGL_compressed_texture_etc1') as any)?.COMPRESSED_RGB_ETC1_WEBGL ?? 0;
+      case TextureFormat.BC5_RG:      return this.capabilities.rgtc;
+      case TextureFormat.BC6H_RGB_UF:
+      case TextureFormat.BC7_RGBA:    return this.capabilities.bptc;
+      case TextureFormat.ETC1_RGB:    return this.capabilities.etc1;
       case TextureFormat.ETC2_RGB:
-        return etc?.COMPRESSED_RGB8_ETC2 ?? 0;
       case TextureFormat.ETC2_RGBA:
-        return etc?.COMPRESSED_RGBA8_ETC2_EAC ?? 0;
       case TextureFormat.ETC2_RGBA1:
-        return etc?.COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2 ?? 0;
-
-      // ASTC formats
+      case TextureFormat.EAC_R11:
+      case TextureFormat.EAC_RG11:    return this.capabilities.etc;
       case TextureFormat.ASTC_4x4:
-        return astc?.COMPRESSED_RGBA_ASTC_4x4_KHR ?? 0;
+      case TextureFormat.ASTC_5x5:
       case TextureFormat.ASTC_6x6:
-        return astc?.COMPRESSED_RGBA_ASTC_6x6_KHR ?? 0;
-      case TextureFormat.ASTC_8x8:
-        return astc?.COMPRESSED_RGBA_ASTC_8x8_KHR ?? 0;
-
-      // PVRTC formats
+      case TextureFormat.ASTC_8x8:    return this.capabilities.astc;
       case TextureFormat.PVRTC1_4_RGB:
-        return pvrtc?.COMPRESSED_RGB_PVRTC_4BPPV1_IMG ?? 0;
       case TextureFormat.PVRTC1_4_RGBA:
-        return pvrtc?.COMPRESSED_RGBA_PVRTC_4BPPV1_IMG ?? 0;
-
-      // Fallback
+      case TextureFormat.PVRTC1_2_RGB:
+      case TextureFormat.PVRTC1_2_RGBA: return this.capabilities.pvrtc;
       case TextureFormat.RGBA8:
-        return gl.RGBA;
-      case TextureFormat.SRGB8_ALPHA8:
-        return (gl as WebGL2RenderingContext).SRGB8_ALPHA8 ?? gl.RGBA;
-
-      default:
-        return 0;
+      case TextureFormat.SRGB8_ALPHA8:  return true;
+      default: return false;
     }
   }
 
+  getBestFormat(hasAlpha: boolean, isSrgb: boolean): TextureFormat {
+    if (this.capabilities.astc) return TextureFormat.ASTC_4x4;
+    if (this.capabilities.bptc) return TextureFormat.BC7_RGBA;
+    if (this.capabilities.etc)  return hasAlpha ? TextureFormat.ETC2_RGBA : TextureFormat.ETC2_RGB;
+    if (this.capabilities.s3tc) return hasAlpha ? TextureFormat.BC3_RGBA  : TextureFormat.BC1_RGB;
+    if (this.capabilities.etc1 && !hasAlpha) return TextureFormat.ETC1_RGB;
+    if (this.capabilities.pvrtc) return hasAlpha ? TextureFormat.PVRTC1_4_RGBA : TextureFormat.PVRTC1_4_RGB;
+    return isSrgb ? TextureFormat.SRGB8_ALPHA8 : TextureFormat.RGBA8;
+  }
+
   /**
-   * Print capabilities to console
+   * Get WebGL internal format constant.
+   * Uses cached values — no getExtension() calls.
+   * On WebGPU returns 0 (not applicable; upload path uses PlayCanvas abstraction).
    */
+  getInternalFormat(format: TextureFormat): number {
+    if (this.isWebGpu) return 0;
+
+    const f = this.extFormats;
+    switch (format) {
+      case TextureFormat.BC1_RGB:    return f.COMPRESSED_RGB_S3TC_DXT1_EXT   ?? 0;
+      case TextureFormat.BC1_RGBA:   return f.COMPRESSED_RGBA_S3TC_DXT1_EXT  ?? 0;
+      case TextureFormat.BC3_RGBA:   return f.COMPRESSED_RGBA_S3TC_DXT5_EXT  ?? 0;
+      case TextureFormat.BC4_R:      return f.COMPRESSED_RED_RGTC1_EXT       ?? 0;
+      case TextureFormat.BC5_RG:     return f.COMPRESSED_RED_GREEN_RGTC2_EXT ?? 0;
+      case TextureFormat.BC7_RGBA:   return f.COMPRESSED_RGBA_BPTC_UNORM_EXT ?? 0;
+      case TextureFormat.ETC1_RGB:   return f.COMPRESSED_RGB_ETC1_WEBGL      ?? 0;
+      case TextureFormat.ETC2_RGB:   return f.COMPRESSED_RGB8_ETC2           ?? 0;
+      case TextureFormat.ETC2_RGBA:  return f.COMPRESSED_RGBA8_ETC2_EAC      ?? 0;
+      case TextureFormat.ETC2_RGBA1: return f.COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2 ?? 0;
+      case TextureFormat.ASTC_4x4:   return f.COMPRESSED_RGBA_ASTC_4x4_KHR   ?? 0;
+      case TextureFormat.ASTC_6x6:   return f.COMPRESSED_RGBA_ASTC_6x6_KHR   ?? 0;
+      case TextureFormat.ASTC_8x8:   return f.COMPRESSED_RGBA_ASTC_8x8_KHR   ?? 0;
+      case TextureFormat.PVRTC1_4_RGB:  return f.COMPRESSED_RGB_PVRTC_4BPPV1_IMG  ?? 0;
+      case TextureFormat.PVRTC1_4_RGBA: return f.COMPRESSED_RGBA_PVRTC_4BPPV1_IMG ?? 0;
+      case TextureFormat.RGBA8:       return f.RGBA          ?? 0x1908; // gl.RGBA
+      case TextureFormat.SRGB8_ALPHA8:return f.SRGB8_ALPHA8  ?? 0x8C43; // gl.SRGB8_ALPHA8
+      default: return 0;
+    }
+  }
+
   logCapabilities(): void {
     const caps = this.capabilities;
+    console.log(`[GPU] Device: ${this.isWebGpu ? 'WebGPU' : 'WebGL2'}`);
     console.log('[GPU] Compressed Texture Format Support:');
     console.log('  Desktop:');
-    console.log('    - S3TC (BC1-BC3/DXT):', caps.s3tc ? '✅' : '❌');
-    console.log('    - S3TC sRGB:        ', caps.s3tc_srgb ? '✅' : '❌');
-    console.log('    - BPTC (BC6H/BC7):  ', caps.bptc ? '✅' : '❌');
-    console.log('    - RGTC (BC4/BC5):   ', caps.rgtc ? '✅' : '❌');
+    console.log('    - S3TC (BC1-BC3/DXT):', caps.s3tc    ? '✅' : '❌');
+    console.log('    - S3TC sRGB:         ', caps.s3tc_srgb ? '✅' : '❌');
+    console.log('    - BPTC (BC6H/BC7):   ', caps.bptc    ? '✅' : '❌');
+    console.log('    - RGTC (BC4/BC5):    ', caps.rgtc    ? '✅' : '❌');
     console.log('  Mobile:');
-    console.log('    - ETC1:             ', caps.etc1 ? '✅' : '❌');
-    console.log('    - ETC2/EAC:         ', caps.etc ? '✅' : '❌');
-    console.log('    - ASTC:             ', caps.astc ? '✅' : '❌');
-    console.log('    - PVRTC:            ', caps.pvrtc ? '✅' : '❌');
-
-    const bestRGB = this.getBestFormat(false, false);
+    console.log('    - ETC1:              ', caps.etc1    ? '✅' : '❌');
+    console.log('    - ETC2/EAC:          ', caps.etc     ? '✅' : '❌');
+    console.log('    - ASTC:              ', caps.astc    ? '✅' : '❌');
+    console.log('    - PVRTC:             ', caps.pvrtc   ? '✅' : '❌');
+    const bestRGB  = this.getBestFormat(false, false);
     const bestRGBA = this.getBestFormat(true, false);
     console.log('[GPU] Best formats:');
-    console.log('    - RGB:  ', bestRGB);
-    console.log('    - RGBA: ', bestRGBA);
+    console.log('    - RGB: ', bestRGB);
+    console.log('    - RGBA:', bestRGBA);
   }
 }
