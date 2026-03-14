@@ -220,6 +220,12 @@ export class MeshoptLoader {
       // Step 2: Load JS code as text (NOT via import)
       const jsCode = await this._loadJsAsText(mjsUrl);
 
+      // Parse version from file comment: "Built from meshoptimizer 0.21"
+      const verMatch = jsCode.match(/meshoptimizer\s+([\d.]+)/);
+      if (verMatch) {
+        console.log('[SYSTEM] meshopt: ' + verMatch[1]);
+      }
+
       // Step 3: Execute JS code to get MeshoptDecoder
       const decoder = this._executeJsCode(jsCode, mjsUrl);
 
