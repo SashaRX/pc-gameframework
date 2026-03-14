@@ -396,9 +396,7 @@ fn getAlbedo() {
     const device = this.app.graphicsDevice;
     this.gpuFormatDetector = new GpuFormatDetector(device);
 
-    if (this.config.logLevel >= this.LOG_INFO) {
-      this.gpuFormatDetector.logCapabilities();
-    }
+    this.gpuFormatDetector.logCapabilities();
 
     // Register custom shader chunk for progressive LOD clamping
     this.createShaderChunk();
@@ -603,7 +601,7 @@ fn getAlbedo() {
 
     // 4. Select transcode format based on GPU capabilities (BEFORE creating texture)
     const transcodeConfig = this.selectTranscodeFormat(probe.colorSpace.hasAlpha);
-    this.log(this.LOG_INFO, `[KTX2] Selected transcode format: ${transcodeConfig.format} (compressed=${transcodeConfig.isCompressed})`);
+    console.log(`[KTX2] Selected transcode format: ${transcodeConfig.format} (compressed=${transcodeConfig.isCompressed})`);
 
     // 5. Create texture with correct format
     const texture = this.createTexture(
@@ -668,6 +666,19 @@ fn getAlbedo() {
 
         const transcodeTime = performance.now() - transcodeStart;
         loadStats.bytesTranscoded += result.data.byteLength;
+
+        // Diagnostic: verify transcoded data matches expected format
+        if (transcodeConfig.isCompressed && result.data) {
+          const rgbaSize = result.width * result.height * 4;
+          if (result.data.byteLength === rgbaSize) {
+            this.logWarn(
+              `[KTX2] DIAGNOSTIC: Level ${i} (${result.width}x${result.height}) — ` +
+              `requested format=${transcodeConfig.format} isCompressed=true, ` +
+              `but data=${result.data.byteLength}B matches RGBA (${rgbaSize}B). ` +
+              `Transcode may have silently fallen back to RGBA.`
+            );
+          }
+        }
 
         // Save to cache
         if (this.config.enableCache && this.cacheManager) {
