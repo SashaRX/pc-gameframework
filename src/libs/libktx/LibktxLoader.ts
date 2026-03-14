@@ -81,19 +81,13 @@ export class LibktxLoader {
     wasmUrl: string
   ): Promise<KtxModule> {
     try {
-      if (this.verbose) {
-        console.log('[LibktxLoader] Starting initialization...');
-        console.log('  - libktx.mjs:', mjsUrl);
-        console.log('  - libktx.wasm:', wasmUrl);
-      }
+      console.log('[LibktxLoader] Initializing...');
 
       // Step 1: Load JS code as text
       const t0 = performance.now();
       const jsCode = await this._loadJsAsText(mjsUrl);
       const t1 = performance.now();
-      if (this.verbose) {
-        console.log(`[LibktxLoader] libktx.mjs fetched (${(t1 - t0).toFixed(0)}ms, ${(jsCode.length / 1024).toFixed(0)} KB)`);
-      }
+      console.log(`[LibktxLoader] libktx.mjs fetched (${(t1 - t0).toFixed(0)}ms, ${(jsCode.length / 1024).toFixed(0)} KB)`);
 
       // Step 2: Execute JS code to get factory function
       const factory = this._executeJsCode(jsCode, mjsUrl);
@@ -102,23 +96,26 @@ export class LibktxLoader {
       const t2 = performance.now();
       const wasmBinary = await this._loadWasmBinary(wasmUrl);
       const t3 = performance.now();
-      if (this.verbose) {
-        console.log(`[LibktxLoader] libktx.wasm fetched (${(t3 - t2).toFixed(0)}ms, ${(wasmBinary.byteLength / 1024).toFixed(0)} KB)`);
-      }
+      console.log(`[LibktxLoader] libktx.wasm fetched (${(t3 - t2).toFixed(0)}ms, ${(wasmBinary.byteLength / 1024).toFixed(0)} KB)`);
 
       // Step 4: Initialize WASM module
       const t4 = performance.now();
       const module = await this._initializeWasmModule(factory, wasmBinary, wasmUrl);
       const t5 = performance.now();
-      if (this.verbose) {
-        console.log(`[LibktxLoader] WASM compiled (${(t5 - t4).toFixed(0)}ms)`);
-      }
+      console.log(`[LibktxLoader] WASM module ready (${(t5 - t4).toFixed(0)}ms)`);
+
+      // Step 5: Try to read libktx version from CDN
+      try {
+        const versionUrl = wasmUrl.replace(/libktx\.wasm.*$/, 'version.txt');
+        const vResp = await fetch(versionUrl);
+        if (vResp.ok) {
+          const libktxVersion = (await vResp.text()).trim();
+          console.log('[LibktxLoader] KTX-Software ' + libktxVersion);
+        }
+      } catch (_) { /* non-critical */ }
 
       this.ktxModule = module;
-
-      if (this.verbose) {
-        console.log('[LibktxLoader] Initialization complete');
-      }
+      console.log(`[LibktxLoader] Total init: ${(t5 - t0).toFixed(0)}ms`);
 
       return module;
 
