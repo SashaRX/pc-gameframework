@@ -56,12 +56,15 @@ export class KtxCacheManager {
       request.onupgradeneeded = (event: IDBVersionChangeEvent) => {
         const db = (event.target as IDBOpenDBRequest).result;
 
-        // Create object store if it doesn't exist
-        if (!db.objectStoreNames.contains(this.STORE_NAME)) {
-          const store = db.createObjectStore(this.STORE_NAME, { keyPath: 'id' });
-          store.createIndex('timestamp', 'timestamp', { unique: false });
-          store.createIndex('url', 'url', { unique: false });
+        // Drop old store on version bump to invalidate stale cache entries
+        // (e.g. RGBA data stored under compressed format keys)
+        if (db.objectStoreNames.contains(this.STORE_NAME)) {
+          db.deleteObjectStore(this.STORE_NAME);
         }
+
+        const store = db.createObjectStore(this.STORE_NAME, { keyPath: 'id' });
+        store.createIndex('timestamp', 'timestamp', { unique: false });
+        store.createIndex('url', 'url', { unique: false });
       };
     });
   }
@@ -221,6 +224,20 @@ export class KtxCacheManager {
         if (result) {
           // Validate format matches (extra safety check)
           if (result.transcodeFormat === transcodeFormat) {
+            // Validate data size: if format claims compressed but data is RGBA-sized,
+            // the cache entry was written by a buggy worker that ignored targetFormat.
+            // Discard and re-transcode.
+            if (transcodeFormat !== 13 && result.width && result.height && result.data) {
+              const rgbaSize = result.width * result.height * 4;
+              if (result.data.byteLength === rgbaSize) {
+                // Stale RGBA data stored under compressed format key — evict it
+                const evictTx = this.db!.transaction([this.STORE_NAME], 'readwrite');
+                evictTx.objectStore(this.STORE_NAME).delete(id);
+                this.stats.misses++;
+                resolve(null);
+                return;
+              }
+            }
             this.stats.hits++;
             resolve(result);
           } else {

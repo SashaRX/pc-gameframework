@@ -403,7 +403,7 @@ fn getAlbedo() {
 
     // Initialize cache
     if (this.config.enableCache) {
-      this.cacheManager = new KtxCacheManager('ktx2-cache', 1);
+      this.cacheManager = new KtxCacheManager('ktx2-cache', 2);
       await this.cacheManager.init();
 
       // Clean old entries
