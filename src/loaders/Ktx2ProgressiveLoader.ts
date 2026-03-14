@@ -28,7 +28,7 @@ import { GpuFormatDetector, TextureFormat } from './GpuFormatDetector';
 import { alignValue, readU64asNumber, writeU64 } from './utils/alignment';
 import { parseDFDColorSpace } from './utils/colorspace';
 import { LibktxLoader } from '../libs/libktx/LibktxLoader';
-import { FRAMEWORK_VERSION, BUILD_NUMBER } from '../version';
+import { FRAMEWORK_VERSION, BUILD_COUNT } from '../version';
 import { WORKER_CODE } from './worker-inline';
 
 export class Ktx2ProgressiveLoader {
@@ -380,7 +380,7 @@ fn getAlbedo() {
    */
   async initialize(): Promise<void> {
     this.log(this.LOG_INFO, '[KTX2] Initializing loader...');
-    console.log('[SYSTEM] pc-gameframework v' + FRAMEWORK_VERSION + ' | build #' + BUILD_NUMBER);
+    console.log('[SYSTEM] pc-gameframework v' + FRAMEWORK_VERSION + ' | build #' + BUILD_COUNT);
 
     // Validate required URLs
     if (!this.config.libktxModuleUrl || !this.config.libktxWasmUrl) {

@@ -130,14 +130,16 @@ function pcsync(cmd) {
 }
 
 // ─── шаги ─────────────────────────────────────────────────────────────────────
-function bumpBuildNumber() {
-  const numPath = path.join(process.cwd(), '.buildnum');
-  let num = 0;
-  try { num = parseInt(fs.readFileSync(numPath, 'utf8').trim(), 10) || 0; } catch (_) {}
-  num++;
-  fs.writeFileSync(numPath, String(num) + '\n', 'utf8');
-  console.log('0. Build #' + num + '\n');
-  return num;
+async function fetchBuildCount() {
+  try {
+    const data = await pcRequest('GET', `/projects/${PROJECT_ID}/apps?limit=100`);
+    const count = (data.result || []).length;
+    const file = path.join(process.cwd(), 'build-number');
+    fs.writeFileSync(file, String(count) + '\n', 'utf8');
+    console.log(`PlayCanvas builds: ${count}\n`);
+  } catch (e) {
+    console.warn('Could not fetch build count:', e.message || e);
+  }
 }
 
 function cleanLocalBuild() {
@@ -261,7 +263,7 @@ async function main() {
   console.log('║  FRAMEWORK CLEAN & PUSH                  ║');
   console.log('╚══════════════════════════════════════════╝\n');
 
-  bumpBuildNumber();
+  await fetchBuildCount();
   cleanLocalBuild();
   buildProject();
   await cleanPlayCanvas();   // сначала чистим старое
