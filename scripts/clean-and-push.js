@@ -23,6 +23,7 @@ const https = require('https');
 // ─── конфиг ──────────────────────────────────────────────────────────────────
 const BUILD_DIR    = 'build/esm';
 const TAG          = 'framework-managed';
+const SYSTEM_TAG   = 'system';
 const PC_API_KEY   = 'nR52SL5LoTT327VWAPzRcsETR6yUixEC';
 const PROJECT_ID   = 1416468;
 const BRANCH_ID    = 'aa5b09b6-83d5-48e0-a7b3-fe1fb721c935';
@@ -202,8 +203,13 @@ async function pushAndTag() {
     const name = path.basename(file);
     const asset = assetByName.get(name);
     if (asset) {
-      await setAssetTag(asset.id, asset.tags || []);
-      tagged++;
+      const existingTags = asset.tags || [];
+      if (existingTags.includes(SYSTEM_TAG)) {
+        console.log('   ⊘ ' + name + ' (system, skipped)');
+      } else {
+        await setAssetTag(asset.id, existingTags);
+        tagged++;
+      }
     } else {
       console.log(`   ! тег не выставлен: ${name} (не найден в API)`);
       untagged++;
@@ -226,6 +232,9 @@ async function cleanPlayCanvas() {
   for (const asset of allAssets) {
     const name = asset.name;
     const tags = asset.tags || [];
+
+    // Защита system-ассетов — никогда не трогаем, только вручную
+    if (tags.includes(SYSTEM_TAG)) continue;
 
     // Условие удаления:
     // 1. Файл помечен нашим тегом (мы его загружали)
