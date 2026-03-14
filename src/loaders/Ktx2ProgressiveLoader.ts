@@ -416,15 +416,22 @@ fn getAlbedo() {
 
     // Initialize worker
     if (this.config.useWorker) {
+      const t0 = performance.now();
       const success = await this.initWorker();
-      if (!success) {
+      const dt = (performance.now() - t0).toFixed(0);
+      if (success) {
+        console.log(`[SYSTEM] libktx worker ready (${dt}ms) — ${this.config.libktxModuleUrl}`);
+      } else {
         this.logWarn('[KTX2] Worker initialization failed, will use main thread');
       }
     }
 
     // Fallback: initialize main thread module
     if (!this.config.useWorker || !this.workerReady) {
+      const t0 = performance.now();
       await this.initMainThreadModule();
+      const dt = (performance.now() - t0).toFixed(0);
+      console.log(`[SYSTEM] libktx main-thread ready (${dt}ms) — ${this.config.libktxModuleUrl}`);
     }
 
     this.log(this.LOG_INFO, '[KTX2] Loader ready');
