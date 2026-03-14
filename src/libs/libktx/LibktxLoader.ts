@@ -229,6 +229,30 @@ export class LibktxLoader {
         }
       });
 
+      // Patch HEAPU8/UTF8ToString if not exported (MODULARIZE mode)
+      if (!module.HEAPU8) {
+        const mem: ArrayBuffer | null =
+          (module as any).wasmMemory?.buffer ??
+          (module as any).asm?.memory?.buffer ??
+          null;
+        if (!mem) {
+          throw new Error('[LibktxLoader] Cannot find WASM memory buffer — HEAPU8 unavailable');
+        }
+        (module as any).HEAPU8 = new Uint8Array(mem);
+        (module as any).HEAPU32 = new Uint32Array(mem);
+        (module as any).HEAP8 = new Int8Array(mem);
+      }
+
+      if (!module.UTF8ToString) {
+        (module as any).UTF8ToString = (ptr: number): string => {
+          let s = '';
+          const heap = (module as any).HEAPU8 as Uint8Array;
+          let i = ptr;
+          while (heap[i]) s += String.fromCharCode(heap[i++]);
+          return s;
+        };
+      }
+
       if (this.verbose) {
         console.log('[LibktxLoader] WASM module initialized successfully');
       }
