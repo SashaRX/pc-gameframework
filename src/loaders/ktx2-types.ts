@@ -166,6 +166,8 @@ export interface WorkerTranscodeMessage {
   messageId: number;
   data: {
     miniKtx: ArrayBuffer;
+    targetFormat: number;
+    isCompressed: boolean;
   };
 }
 

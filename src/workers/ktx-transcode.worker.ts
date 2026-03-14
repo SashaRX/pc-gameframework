@@ -112,9 +112,9 @@ async function initializeModule(libktxCode: string, wasmUrl: string): Promise<vo
 }
 
 /**
- * Transcode mini-KTX2 to RGBA
+ * Transcode mini-KTX2 to the requested GPU format
  */
-function transcodeMainThread(miniKtx: Uint8Array): Ktx2TranscodeResult {
+function transcodeMainThread(miniKtx: Uint8Array, targetFormat: number): Ktx2TranscodeResult {
   if (!ktxModule || !ktxApi) {
     throw new Error('Worker not initialized');
   }
@@ -163,13 +163,8 @@ function transcodeMainThread(miniKtx: Uint8Array): Ktx2TranscodeResult {
         const needsTranscode = api.needsTranscoding(texPtr);
 
         if (needsTranscode) {
-          // Get RGBA32 format constant (value: 13)
-          const RGBA32_FORMAT = typeof ktxModule.TranscodeTarget === 'function'
-            ? 13
-            : (ktxModule.TranscodeTarget.RGBA32?.value ?? 13);
-
-          // Transcode to RGBA32
-          const rcT = api.transcode(texPtr, RGBA32_FORMAT, 0);
+          // Transcode to the format requested by the main thread
+          const rcT = api.transcode(texPtr, targetFormat, 0);
 
           if (rcT !== 0) {
             const errorMsg = api.errorString ? api.errorString(rcT) : `Error code ${rcT}`;
@@ -254,7 +249,7 @@ self.onmessage = async (e: MessageEvent) => {
       }
 
       const miniKtx = new Uint8Array(transcodeMsg.data.miniKtx);
-      const result = transcodeMainThread(miniKtx);
+      const result = transcodeMainThread(miniKtx, transcodeMsg.data.targetFormat ?? 13);
 
       const response: WorkerResponse = {
         type: 'transcode',
