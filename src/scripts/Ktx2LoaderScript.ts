@@ -17,6 +17,12 @@ export class Ktx2LoaderScript extends Script {
 
   /**
    * @attribute
+   * @description Project version displayed in loading screen
+   */
+  projectVersion = '1.0.0';
+
+  /**
+   * @attribute
    */
   ktxUrl = '';
 
@@ -143,6 +149,7 @@ export class Ktx2LoaderScript extends Script {
 
   async initialize() {
     console.log('[KTX2] Script initializing...');
+    console.log('[SYSTEM] Project v' + this.projectVersion + ' | Engine ' + (window as any).pc?.version);
 
     // Validate required URLs
     if (!this.libktxMjsUrl || !this.libktxWasmUrl) {

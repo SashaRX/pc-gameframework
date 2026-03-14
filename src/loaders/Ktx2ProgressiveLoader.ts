@@ -28,6 +28,7 @@ import { GpuFormatDetector, TextureFormat } from './GpuFormatDetector';
 import { alignValue, readU64asNumber, writeU64 } from './utils/alignment';
 import { parseDFDColorSpace } from './utils/colorspace';
 import { LibktxLoader } from '../libs/libktx/LibktxLoader';
+import { FRAMEWORK_VERSION } from '../version';
 import { WORKER_CODE } from './worker-inline';
 
 export class Ktx2ProgressiveLoader {
@@ -379,6 +380,7 @@ fn getAlbedo() {
    */
   async initialize(): Promise<void> {
     this.log(this.LOG_INFO, '[KTX2] Initializing loader...');
+    console.log('[SYSTEM] pc-gameframework v' + FRAMEWORK_VERSION);
 
     // Validate required URLs
     if (!this.config.libktxModuleUrl || !this.config.libktxWasmUrl) {
@@ -1042,11 +1044,13 @@ fn getAlbedo() {
       };
 
       // Load libktx code
+      const fetchStart = performance.now();
       const mjsResponse = await fetch(mjsUrl);
       if (!mjsResponse.ok) {
         throw new Error(`Failed to fetch libktx.mjs: ${mjsResponse.status}`);
       }
       const libktxCode = await mjsResponse.text();
+      this.log(this.LOG_INFO, `[KTX2] Worker libktx.mjs fetched (${(performance.now() - fetchStart).toFixed(0)}ms, ${(libktxCode.length / 1024).toFixed(0)} KB)`);
 
       // Initialize worker
       const initPromise = new Promise<void>((resolve, reject) => {
@@ -1079,9 +1083,10 @@ fn getAlbedo() {
         });
       });
 
+      const workerInitStart = performance.now();
       await initPromise;
 
-      this.log(this.LOG_INFO, '[KTX2] Worker initialized successfully');
+      this.log(this.LOG_INFO, `[KTX2] Worker initialized (${(performance.now() - workerInitStart).toFixed(0)}ms)`);
 
       return true;
 

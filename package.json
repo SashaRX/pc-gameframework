@@ -1,6 +1,6 @@
 {
   "name": "pc-gameframework",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "author": "SashaRX",
   "description": "PlayCanvas Game Framework - KTX2 streaming, meshopt, materials, cubemaps, postfx",
   "keywords": [
@@ -18,8 +18,8 @@
   "main": "build/main.bundle.js",
   "scripts": {
     "build": "npm run build:esm",
-    "build:esm": "tsc --project tsconfig.esm.json && node scripts/build-worker-inline.mjs && npm run rename-to-mjs",
-    "build:clean": "node -e \"const fs = require('fs'); if (fs.existsSync('build')) fs.rmSync('build', {recursive: true}); console.log('✅ Cleaned build/')\" && npm run build:esm",
+    "build:esm": "node scripts/generate-version.mjs && tsc --project tsconfig.esm.json && node scripts/build-worker-inline.mjs && npm run rename-to-mjs",
+    "build:clean": "node -e \"const fs = require('fs'); if (fs.existsSync('build')) fs.rmSync('build', {recursive: true}); console.log('\u2705 Cleaned build/')\" && npm run build:esm",
     "rename-to-mjs": "node scripts/rename-to-mjs.js",
     "cleanup": "node scripts/cleanup.js",
     "cleanup:dry": "node scripts/cleanup.js --dry-run",

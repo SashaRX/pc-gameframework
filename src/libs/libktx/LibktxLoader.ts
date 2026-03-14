@@ -88,16 +88,31 @@ export class LibktxLoader {
       }
 
       // Step 1: Load JS code as text
+      const t0 = performance.now();
       const jsCode = await this._loadJsAsText(mjsUrl);
+      const t1 = performance.now();
+      if (this.verbose) {
+        console.log(`[LibktxLoader] libktx.mjs fetched (${(t1 - t0).toFixed(0)}ms, ${(jsCode.length / 1024).toFixed(0)} KB)`);
+      }
 
       // Step 2: Execute JS code to get factory function
       const factory = this._executeJsCode(jsCode, mjsUrl);
 
       // Step 3: Load WASM binary
+      const t2 = performance.now();
       const wasmBinary = await this._loadWasmBinary(wasmUrl);
+      const t3 = performance.now();
+      if (this.verbose) {
+        console.log(`[LibktxLoader] libktx.wasm fetched (${(t3 - t2).toFixed(0)}ms, ${(wasmBinary.byteLength / 1024).toFixed(0)} KB)`);
+      }
 
       // Step 4: Initialize WASM module
+      const t4 = performance.now();
       const module = await this._initializeWasmModule(factory, wasmBinary, wasmUrl);
+      const t5 = performance.now();
+      if (this.verbose) {
+        console.log(`[LibktxLoader] WASM compiled (${(t5 - t4).toFixed(0)}ms)`);
+      }
 
       this.ktxModule = module;
 
