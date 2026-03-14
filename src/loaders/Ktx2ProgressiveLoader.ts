@@ -1490,47 +1490,57 @@ self.onmessage = async function(e) {
    * Uses Range header if supported, falls back to full GET
    */
   private async fetchRange(url: string, start: number, end: number): Promise<Uint8Array> {
+    const fileName = url.split('/').pop()?.split('?')[0] ?? url;
+
+    // Helper: translate HTTP status to human-readable message
+    const httpError = (status: number, phase: string): Error => {
+      if (status === 404) {
+        return new Error(`[KTX2] Texture not found (404): "${fileName}"\nURL: ${url}`);
+      }
+      if (status === 403) {
+        return new Error(`[KTX2] Access denied (403): "${fileName}" — check bucket permissions\nURL: ${url}`);
+      }
+      return new Error(`[KTX2] ${phase} failed (${status}): "${fileName}"\nURL: ${url}`);
+    };
+
     try {
       // Try range request first
       const response = await fetch(url, {
-        headers: {
-          'Range': `bytes=${start}-${end}`,
-        },
+        headers: { 'Range': `bytes=${start}-${end}` },
       });
 
       if (!response.ok) {
-        throw new Error(`Fetch failed: ${response.status} ${response.statusText}`);
+        throw httpError(response.status, 'Range request');
       }
 
-      // Check if server supports ranges (206 Partial Content)
       if (response.status === 206) {
-        const arrayBuffer = await response.arrayBuffer();
-        return new Uint8Array(arrayBuffer);
+        return new Uint8Array(await response.arrayBuffer());
       }
 
-      // Server returned 200 (full content) - extract the range we need
       if (response.status === 200) {
-        const arrayBuffer = await response.arrayBuffer();
-        const fullData = new Uint8Array(arrayBuffer);
-
-        // Return the requested slice
+        // Server returned full content — slice the needed range
+        const fullData = new Uint8Array(await response.arrayBuffer());
         return fullData.slice(start, end + 1);
       }
 
-      throw new Error(`Unexpected response status: ${response.status}`);
-    } catch (error) {
-      // Fallback: fetch entire file and slice
-      this.logWarn(`[KTX2] Range request failed (${start}-${end}), falling back to full fetch:`, error);
+      throw new Error(`[KTX2] Unexpected response status ${response.status} for "${fileName}"`);
 
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`Fallback fetch failed: ${response.status} ${response.statusText}`);
+    } catch (error) {
+      // Only fallback for network errors (TypeError), not HTTP errors
+      if (error instanceof TypeError) {
+        this.logWarn(`[KTX2] Range request network error (${start}-${end}), falling back to full fetch:`, error);
+
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw httpError(response.status, 'Fallback fetch');
+        }
+
+        const fullData = new Uint8Array(await response.arrayBuffer());
+        return fullData.slice(start, end + 1);
       }
 
-      const arrayBuffer = await response.arrayBuffer();
-      const fullData = new Uint8Array(arrayBuffer);
-
-      return fullData.slice(start, end + 1);
+      // HTTP errors (404, 403, etc.) — re-throw as-is, no fallback
+      throw error;
     }
   }
 
