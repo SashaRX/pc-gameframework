@@ -164,46 +164,40 @@ async function pushAndTag() {
   const files = getAllFiles(BUILD_DIR);
   console.log(`   Файлов к пушу: ${files.length}`);
 
-  // Получаем текущие асеты чтобы знать теги
-  const allAssets = await getAllAssets();
-  const assetByName = new Map(allAssets.map(a => [a.name, a]));
-
+  // Шаг 1: пушим все файлы
   let ok = 0, fail = 0;
-
   for (const file of files) {
     try {
       pcsync(`push "${file}"`);
-
-      // Ищем асет по имени файла (без пути)
-      const name = path.basename(file);
-      // Небольшая пауза чтобы API успел увидеть новый файл
-      await new Promise(r => setTimeout(r, 200));
-
-      // Перезапрашиваем если нужно
-      let asset = assetByName.get(name);
-      if (!asset) {
-        // Файл только что создан — ищем заново
-        const fresh = await pcRequest(
-          'GET',
-          `/projects/${PROJECT_ID}/assets?branchId=${BRANCH_ID}&limit=5&search=${encodeURIComponent(name)}`
-        );
-        asset = (fresh.result || []).find(a => a.name === name);
-      }
-
-      if (asset) {
-        await setAssetTag(asset.id, asset.tags || []);
-        console.log(`   ✓ ${file}  [${TAG}]`);
-      } else {
-        console.log(`   ✓ ${file}  (тег не выставлен — асет не найден в API)`);
-      }
+      console.log(`   ✓ ${file}`);
       ok++;
     } catch (e) {
       console.error(`   ✗ ${file}: ${e.message}`);
       fail++;
     }
   }
+  console.log(`\n   Запушено: ${ok}, ошибок: ${fail}`);
 
-  console.log(`\n   Запушено: ${ok}, ошибок: ${fail}\n`);
+  // Шаг 2: ждём немного и расставляем теги
+  console.log('\n   Расставляю теги framework-managed...');
+  await new Promise(r => setTimeout(r, 2000));
+
+  const allAssets = await getAllAssets();
+  const assetByName = new Map(allAssets.map(a => [a.name, a]));
+
+  let tagged = 0, untagged = 0;
+  for (const file of files) {
+    const name = path.basename(file);
+    const asset = assetByName.get(name);
+    if (asset) {
+      await setAssetTag(asset.id, asset.tags || []);
+      tagged++;
+    } else {
+      console.log(`   ! тег не выставлен: ${name} (не найден в API)`);
+      untagged++;
+    }
+  }
+  console.log(`   Помечено: ${tagged}, не найдено: ${untagged}\n`);
 }
 
 async function cleanPlayCanvas() {
