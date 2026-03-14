@@ -2022,6 +2022,42 @@ fn getAlbedo() {
     }
   }
 
+
+  /**
+   * Bytes per compressed block for a given format
+   */
+  private compressedBytesPerBlock(fmt: TextureFormat): number {
+    switch (fmt) {
+      case TextureFormat.BC1_RGB:
+      case TextureFormat.BC1_RGBA:
+      case TextureFormat.BC4_R:
+      case TextureFormat.ETC1_RGB:
+      case TextureFormat.ETC2_RGB:
+        return 8;
+      case TextureFormat.BC3_RGBA:
+      case TextureFormat.BC5_RG:
+      case TextureFormat.BC7_RGBA:
+      case TextureFormat.ETC2_RGBA:
+      case TextureFormat.ASTC_4x4:
+        return 16;
+      case TextureFormat.PVRTC1_4_RGB:
+      case TextureFormat.PVRTC1_4_RGBA:
+        return 8;
+      default:
+        return 16;
+    }
+  }
+
+  /**
+   * Block dimension (width=height) for a given compressed format
+   */
+  private compressedBlockDim(fmt: TextureFormat): number {
+    switch (fmt) {
+      case TextureFormat.ASTC_6x6: return 6;
+      case TextureFormat.ASTC_8x8: return 8;
+      default: return 4; // BC, ETC, ASTC 4x4, PVRTC
+    }
+  }
   private createTexture(probe: Ktx2ProbeResult, isCompressed: boolean, textureFormat?: TextureFormat): pc.Texture {
     // Determine pixel format based on colorspace
     // In PlayCanvas 2.x, color textures (diffuse, albedo, etc) should use sRGB formats
@@ -2030,11 +2066,10 @@ fn getAlbedo() {
 
     const device = this.app.graphicsDevice;
 
-    // On WebGPU, the texture MUST be created with the exact compressed PIXELFORMAT upfront —
-    // unlike WebGL we cannot switch format post-creation via compressedTexImage2D.
-    // On WebGL we always start with RGBA8/SRGBA8 and replace via direct gl API.
+    // Always create texture with correct PIXELFORMAT for compressed formats.
+    // On both WebGL and WebGPU, mismatched format causes "not renderable" errors.
     let format: number;
-    if (device.isWebGPU && isCompressed && textureFormat) {
+    if (isCompressed && textureFormat) {
       format = this.textureFormatToPixelFormat(textureFormat, !!useSrgb);
     } else {
       // PIXELFORMAT_RGBA8 = 7, PIXELFORMAT_SRGBA8 = 20
@@ -2068,58 +2103,67 @@ fn getAlbedo() {
         `[KTX2] WebGPU: created texture format=${format} levels=${probe.levelCount} ` +
         `(compressed=${isCompressed})`
       );
+    } else if (isCompressed) {
+      // WebGL compressed path: lock/unlock to force PlayCanvas to create the GL texture,
+      // then immediately initialize ALL mip levels with zeroed compressed data.
+      // Without this, uninitialized levels cause "texture not renderable" on mobile GPUs.
+      const pixels = texture.lock();
+      pixels.set(new Uint8Array(4)); // minimal init to create GL object
+      texture.unlock();
+
+      const glInternalFmt = this.gpuFormatDetector
+        ? this.gpuFormatDetector.getInternalFormat(textureFormat!)
+        : 0;
+
+      if (gl && glInternalFmt) {
+        const glTex = (texture as any).impl?._glTexture;
+        if (glTex) {
+          const prevBinding = gl.getParameter(gl.TEXTURE_BINDING_2D);
+          gl.bindTexture(gl.TEXTURE_2D, glTex);
+
+          const bytesPerBlock = this.compressedBytesPerBlock(textureFormat!);
+          const blockDim = this.compressedBlockDim(textureFormat!);
+
+          for (let i = 0; i < probe.levelCount; i++) {
+            const mw = Math.max(1, probe.width >> i);
+            const mh = Math.max(1, probe.height >> i);
+            const bw = Math.max(1, Math.ceil(mw / blockDim));
+            const bh = Math.max(1, Math.ceil(mh / blockDim));
+            const size = bw * bh * bytesPerBlock;
+            gl.compressedTexImage2D(gl.TEXTURE_2D, i, glInternalFmt, mw, mh, 0, new Uint8Array(size));
+          }
+
+          gl.bindTexture(gl.TEXTURE_2D, prevBinding);
+          this.log(this.LOG_VERBOSE, `[KTX2] Initialized ${probe.levelCount} compressed mip levels (${glInternalFmt})`);
+        }
+      }
     } else {
-      // WebGL path: create minimal 1x1 RGBA placeholder so PlayCanvas initializes
-      // the GL texture object. Compressed levels will be uploaded later via
-      // gl.compressedTexImage2D bypassing PlayCanvas format tracking.
-      const initData = new Uint8Array([128, 128, 128, 255]); // 1x1 gray pixel
+      // WebGL RGBA path: lock/unlock + initialize all mip levels
+      const initData = new Uint8Array([128, 128, 128, 255]);
       const pixels = texture.lock();
       pixels.set(initData);
       texture.unlock();
-    }
 
-    if (!isCompressed && !device.isWebGPU) {
-      // RGBA path: Initialize all mipmap levels with full-size placeholder data
-      // WebGPU: skip — PlayCanvas manages mip init via its own texture abstraction.
       const glTexture = (texture as any).impl?._glTexture;
       if (gl && glTexture) {
         const prevBinding = gl.getParameter(gl.TEXTURE_BINDING_2D);
         gl.bindTexture(gl.TEXTURE_2D, glTexture);
 
-        // Re-initialize level 0 with correct size
-        const initSize = probe.width * probe.height * 4;
-        const fullInitData = new Uint8Array(initSize);
-        for (let i = 0; i < initSize; i += 4) {
-          fullInitData[i] = 128;
-          fullInitData[i + 1] = 128;
-          fullInitData[i + 2] = 128;
-          fullInitData[i + 3] = 255;
-        }
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, probe.width, probe.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, fullInitData);
-
-        // Initialize all mip levels > 0
-        for (let i = 1; i < probe.levelCount; i++) {
+        for (let i = 0; i < probe.levelCount; i++) {
           const mipWidth = Math.max(1, probe.width >> i);
           const mipHeight = Math.max(1, probe.height >> i);
           const mipSize = mipWidth * mipHeight * 4;
           const mipData = new Uint8Array(mipSize);
           for (let j = 0; j < mipSize; j += 4) {
-            mipData[j] = 128;
-            mipData[j + 1] = 128;
-            mipData[j + 2] = 128;
-            mipData[j + 3] = 255;
+            mipData[j] = 128; mipData[j+1] = 128; mipData[j+2] = 128; mipData[j+3] = 255;
           }
-          gl.texImage2D(gl.TEXTURE_2D, i, gl.RGBA, mipWidth, mipHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, mipData);
+          const rgbaFmt = useSrgb ? gl.SRGB8_ALPHA8 : gl.RGBA8;
+          gl.texImage2D(gl.TEXTURE_2D, i, rgbaFmt, mipWidth, mipHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, mipData);
         }
 
         gl.bindTexture(gl.TEXTURE_2D, prevBinding);
       }
-
-      this.log(this.LOG_VERBOSE, `[KTX2] Initialized ${probe.levelCount} RGBA mip levels with placeholder data`);
-    } else {
-      // Compressed path: WebGL texture already created by texture.lock/unlock
-      // We'll replace the 1x1 RGBA data with compressed data during upload
-      this.log(this.LOG_VERBOSE, `[KTX2] Compressed texture initialized (1x1 placeholder, will be replaced with compressed data)`);
+      this.log(this.LOG_VERBOSE, `[KTX2] Initialized ${probe.levelCount} RGBA mip levels`);
     }
 
     // Set WebGL parameters for mipmapping and filtering
