@@ -117,10 +117,18 @@ export class Ktx2ProgressiveLoader {
       memoryPoolMaxSize: config.memoryPoolMaxSize ?? 128 * 1024 * 1024, // 128 MB
       assembleFullKtx: config.assembleFullKtx ?? false,
       cacheFullKtx: config.cacheFullKtx ?? false,
+      debugSlowMode: config.debugSlowMode ?? false,
+      debugStepDelayMs: config.debugStepDelayMs ?? 2000,
     };
 
     // Initialize current step delay
-    this.currentStepDelay = this.config.stepDelayMs;
+    this.currentStepDelay = this.config.debugSlowMode
+      ? this.config.debugStepDelayMs
+      : this.config.stepDelayMs;
+
+    if (this.config.debugSlowMode) {
+      console.warn(`[KTX2] ⚠ debugSlowMode ON — ${this.config.debugStepDelayMs}ms delay between levels`);
+    }
 
     // Initialize memory pool
     if (this.config.enableMemoryPool) {
@@ -792,7 +800,10 @@ fn getAlbedo() {
         }
 
         // Adaptive throttling: adjust delay based on actual FPS
-        if (this.config.adaptiveThrottling && this.fpsHistory.length > 3) {
+        if (this.config.debugSlowMode) {
+          // Debug slow mode: fixed large delay to observe each level
+          this.currentStepDelay = this.config.debugStepDelayMs;
+        } else if (this.config.adaptiveThrottling && this.fpsHistory.length > 3) {
           const avgFps = this.getCurrentFps();
           const targetFps = this.config.targetFps;
 
