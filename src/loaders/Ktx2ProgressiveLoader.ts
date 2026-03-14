@@ -1207,8 +1207,25 @@ fn getAlbedo() {
     const dfdLen = view.getUint32(52, true);
     const kvdOff = view.getUint32(56, true);
     const kvdLen = view.getUint32(60, true);
-    const sgdOff = readU64asNumber(view, 64);
+    let sgdOff = readU64asNumber(view, 64);
     const sgdLen = readU64asNumber(view, 72);
+
+    // Workaround: Basis Universal 1.16 writes sgdByteOffset and sgdByteLength
+    // as two uint32 values (8 bytes total) instead of two uint64 values (16 bytes).
+    // readU64asNumber combines the low32 of sgdOff with the low32 of sgdLen as
+    // the high word, producing a bogus offset. Detect and fix by falling back
+    // to just the low 32 bits when the uint64 value exceeds known bounds.
+    if (sgdOff > 0 && sgdLen > 0) {
+      const sgdOffLow32 = view.getUint32(64, true);
+      if (sgdOff !== sgdOffLow32 && sgdOffLow32 + sgdLen <= (totalSize || Infinity)) {
+        this.logWarn(
+          '[KTX2] sgdByteOffset uint64 looks bogus (' + sgdOff + ') — ' +
+          'using low32 (' + sgdOffLow32 + '). ' +
+          'File likely written by Basis Universal <= 1.16.'
+        );
+        sgdOff = sgdOffLow32;
+      }
+    }
 
     // Step 4: Parse level index (starts at byte 80)
     const levelIndexSize = Math.max(1, levelCount) * 24; // 24 bytes per level
