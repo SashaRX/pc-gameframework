@@ -30,3 +30,6 @@ pcconfig.json
 # Temporary
 *.tmp
 .cache/
+
+# Build number (local per project, not committed)
+.buildnum

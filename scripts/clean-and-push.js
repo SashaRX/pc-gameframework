@@ -130,6 +130,16 @@ function pcsync(cmd) {
 }
 
 // ─── шаги ─────────────────────────────────────────────────────────────────────
+function bumpBuildNumber() {
+  const numPath = path.join(process.cwd(), '.buildnum');
+  let num = 0;
+  try { num = parseInt(fs.readFileSync(numPath, 'utf8').trim(), 10) || 0; } catch (_) {}
+  num++;
+  fs.writeFileSync(numPath, String(num) + '\n', 'utf8');
+  console.log('0. Build #' + num + '\n');
+  return num;
+}
+
 function cleanLocalBuild() {
   console.log('1. Чищу локальную build/...');
   if (fs.existsSync('build')) {
@@ -251,6 +261,7 @@ async function main() {
   console.log('║  FRAMEWORK CLEAN & PUSH                  ║');
   console.log('╚══════════════════════════════════════════╝\n');
 
+  bumpBuildNumber();
   cleanLocalBuild();
   buildProject();
   await cleanPlayCanvas();   // сначала чистим старое
