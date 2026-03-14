@@ -89,27 +89,18 @@ async function initializeModule(libktxCode: string, wasmUrl: string): Promise<vo
       throw new Error('Failed to create KTX module');
     }
 
-    // Patch HEAPU8/HEAPU32/UTF8ToString if not exported (MODULARIZE mode)
-    // HEAP8 (Int8Array) is the only exported heap — use its .buffer to build other views
-    if (!ktxModule.HEAPU8) {
-      const heap8 = (ktxModule as any).HEAP8 as Int8Array | undefined;
-      if (!heap8) {
-        throw new Error('[KTX2] HEAP8 not exported — cannot build HEAPU8');
-      }
-      const buf = heap8.buffer;
-      (ktxModule as any).HEAPU8  = new Uint8Array(buf);
-      (ktxModule as any).HEAPU32 = new Uint32Array(buf);
-    }
-
+    // UTF8ToString polyfill — reads fresh view on each call (WASM memory can grow)
     if (!ktxModule.UTF8ToString) {
       (ktxModule as any).UTF8ToString = (ptr: number): string => {
-        let s = '';
-        const heap = (ktxModule as any).HEAPU8 as Uint8Array;
-        let i = ptr;
+        // HEAP8 is exported; create fresh Uint8Array each call to survive memory.grow()
+        const heap = new Uint8Array((ktxModule as any).HEAP8.buffer);
+        let s = '', i = ptr;
         while (heap[i]) s += String.fromCharCode(heap[i++]);
         return s;
       };
     }
+    // NOTE: Do NOT cache HEAPU8 — WASM memory.grow() detaches the old ArrayBuffer.
+    // Use getHeap() helper in transcodeMainThread instead.
 
     // Create API wrappers
     ktxApi = createKtxApi(ktxModule);
@@ -128,9 +119,10 @@ function transcodeMainThread(miniKtx: Uint8Array): Ktx2TranscodeResult {
     throw new Error('Worker not initialized');
   }
 
-  const heapBefore = ktxModule.HEAPU8.length;
   const api = ktxApi;
   const ktx = ktxModule;
+  // Always create fresh view — WASM memory.grow() invalidates previous ArrayBuffer
+  const getHeap = (): Uint8Array => new Uint8Array((ktx as any).HEAP8.buffer);
 
   // Allocate memory for mini-KTX2 data
   const ptr = api.malloc(miniKtx.byteLength);
@@ -140,7 +132,7 @@ function transcodeMainThread(miniKtx: Uint8Array): Ktx2TranscodeResult {
 
   try {
     // Copy miniKtx data to WASM heap
-    ktx.HEAPU8.set(miniKtx, ptr);
+    getHeap().set(miniKtx, ptr);
 
     // Allocate pointer to receive texture pointer
     const outPtrPtr = api.malloc(4);
@@ -197,24 +189,17 @@ function transcodeMainThread(miniKtx: Uint8Array): Ktx2TranscodeResult {
         const total = Math.min(expected, dataSize);
 
         // Copy data from WASM heap
-        const rgbaData = new Uint8Array(ktx.HEAPU8.buffer, dataPtr, total);
+        const heap = getHeap();
+        const rgbaData = new Uint8Array(heap.buffer, dataPtr, total);
         const dataCopy = new Uint8Array(rgbaData); // Make a copy
 
         // Cleanup texture
         api.destroy(texPtr);
 
-        const heapAfter = ktx.HEAPU8.length;
-        const heapFreed = Math.max(0, heapBefore - heapAfter);
-
         return {
           width: baseW,
           height: baseH,
           data: dataCopy,
-          heapStats: {
-            before: heapBefore,
-            after: heapAfter,
-            freed: heapFreed,
-          },
         };
 
       } catch (innerError) {
