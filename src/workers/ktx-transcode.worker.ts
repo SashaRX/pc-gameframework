@@ -89,6 +89,35 @@ async function initializeModule(libktxCode: string, wasmUrl: string): Promise<vo
       throw new Error('Failed to create KTX module');
     }
 
+    // Patch HEAPU8/HEAPU32/UTF8ToString if not exported by the build
+    // In MODULARIZE mode these may be internal — rebuild them from wasmMemory
+    if (!ktxModule.HEAPU8) {
+      // Allocate a small probe to find the live ArrayBuffer
+      const probe = ktxModule._malloc(4);
+      ktxModule._free(probe);
+      // Find memory buffer by scanning known Emscripten exports
+      const mem: ArrayBuffer | null =
+        (ktxModule as any).wasmMemory?.buffer ??
+        (ktxModule as any).asm?.memory?.buffer ??
+        null;
+      if (!mem) {
+        throw new Error('[KTX2] Cannot find WASM memory buffer — HEAPU8 unavailable');
+      }
+      (ktxModule as any).HEAPU8 = new Uint8Array(mem);
+      (ktxModule as any).HEAPU32 = new Uint32Array(mem);
+      (ktxModule as any).HEAP8 = new Int8Array(mem);
+    }
+
+    if (!ktxModule.UTF8ToString) {
+      (ktxModule as any).UTF8ToString = (ptr: number): string => {
+        let s = '';
+        const heap = (ktxModule as any).HEAPU8 as Uint8Array;
+        let i = ptr;
+        while (heap[i]) s += String.fromCharCode(heap[i++]);
+        return s;
+      };
+    }
+
     // Create API wrappers
     ktxApi = createKtxApi(ktxModule);
     isInitialized = true;
