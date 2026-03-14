@@ -267,7 +267,6 @@ export interface KtxApi {
  */
 export interface KtxModule {
   // Direct exported C functions (no cwrap needed)
-  // All pointer/number args - called as module._funcName(args)
   _malloc: (size: number) => number;
   _free: (ptr: number) => void;
   _ktxTexture2_CreateFromMemory: (dataPtr: number, dataSize: number, createFlags: number, outPtr: number) => number;
@@ -282,8 +281,14 @@ export interface KtxModule {
   _ktx_get_num_levels: (handle: number) => number;
   _ktx_get_image_offset: (handle: number, level: number, layer: number, faceSlice: number) => number;
 
-  // Memory helpers
+  // Memory heap
   HEAPU8: Uint8Array;
+  HEAPU32: Uint32Array;
+  HEAP8: Int8Array;
+  HEAP16: Int16Array;
+  HEAP32: Int32Array;
+
+  // String helpers
   UTF8ToString: (ptr: number) => string;
   getValue: (ptr: number, type: string) => number;
   setValue: (ptr: number, value: number, type: string) => void;
@@ -336,32 +341,8 @@ export interface KtxModule {
     HIGH_QUALITY: { value: number };
   };
 
-  // Memory heap
-  HEAPU8: Uint8Array;
-  HEAPU32: Uint32Array;
-  HEAP8: Int8Array;
-  HEAP16: Int16Array;
-  HEAP32: Int32Array;
-
-  // Low-level memory functions
-  _malloc: (size: number) => number;
-  _free: (ptr: number) => void;
-
   // Legacy embind exports (for backward compatibility)
   ktxTexture?: any;
-
-  // Direct C function exports
-  _ktxTexture2_CreateFromMemory?: (dataPtr: number, dataSize: number, createFlags: number, outTexPtrPtr: number) => number;
-  _ktxTexture2_Destroy?: (texPtr: number) => void;
-  _ktxTexture2_TranscodeBasis?: (texPtr: number, format: number, flags: number) => number;
-  _ktxTexture2_NeedsTranscoding?: (texPtr: number) => number;
-  _ktx_get_data?: (texPtr: number) => number;
-  _ktx_get_data_size?: (texPtr: number) => number;
-  _ktx_get_base_width?: (texPtr: number) => number;
-  _ktx_get_base_height?: (texPtr: number) => number;
-  _ktx_get_num_levels?: (texPtr: number) => number;
-  _ktx_get_image_offset?: (texPtr: number, level: number, layer: number, face: number) => number;
-  _ktxErrorString?: (errorCode: number) => number;
 }
 
 // ============================================================================
