@@ -230,17 +230,15 @@ export class LibktxLoader {
       });
 
       // Patch HEAPU8/UTF8ToString if not exported (MODULARIZE mode)
+      // HEAP8 (Int8Array) is the only exported heap — derive others from its buffer
       if (!module.HEAPU8) {
-        const mem: ArrayBuffer | null =
-          (module as any).wasmMemory?.buffer ??
-          (module as any).asm?.memory?.buffer ??
-          null;
-        if (!mem) {
-          throw new Error('[LibktxLoader] Cannot find WASM memory buffer — HEAPU8 unavailable');
+        const heap8 = (module as any).HEAP8 as Int8Array | undefined;
+        if (!heap8) {
+          throw new Error('[LibktxLoader] HEAP8 not exported — cannot build HEAPU8');
         }
-        (module as any).HEAPU8 = new Uint8Array(mem);
-        (module as any).HEAPU32 = new Uint32Array(mem);
-        (module as any).HEAP8 = new Int8Array(mem);
+        const buf = heap8.buffer;
+        (module as any).HEAPU8  = new Uint8Array(buf);
+        (module as any).HEAPU32 = new Uint32Array(buf);
       }
 
       if (!module.UTF8ToString) {
