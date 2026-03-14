@@ -992,20 +992,22 @@ let ktxApi = null;
 let isInitialized = false;
 
 function createKtxApi(module) {
+  // Use direct exported C functions instead of cwrap
+  // cwrap is not guaranteed in EXPORTED_RUNTIME_METHODS — direct calls always work
   return {
-    malloc: module.cwrap('malloc', 'number', ['number']),
-    free: module.cwrap('free', null, ['number']),
-    createFromMemory: module.cwrap('ktxTexture2_CreateFromMemory', 'number', ['number', 'number', 'number', 'number']),
-    destroy: module.cwrap('ktxTexture2_Destroy', null, ['number']),
-    transcode: module.cwrap('ktxTexture2_TranscodeBasis', 'number', ['number', 'number', 'number']),
-    needsTranscoding: module.cwrap('ktxTexture2_NeedsTranscoding', 'number', ['number']),
-    getData: module.cwrap('ktx_get_data', 'number', ['number']),
-    getDataSize: module.cwrap('ktx_get_data_size', 'number', ['number']),
-    getWidth: module.cwrap('ktx_get_base_width', 'number', ['number']),
-    getHeight: module.cwrap('ktx_get_base_height', 'number', ['number']),
-    getLevels: module.cwrap('ktx_get_num_levels', 'number', ['number']),
-    getOffset: module.cwrap('ktx_get_image_offset', 'number', ['number', 'number', 'number', 'number']),
-    errorString: module.cwrap('ktxErrorString', 'string', ['number']),
+    malloc: (size) => module._malloc(size),
+    free: (ptr) => module._free(ptr),
+    createFromMemory: (dataPtr, dataSize, flags, outPtr) => module._ktxTexture2_CreateFromMemory(dataPtr, dataSize, flags, outPtr),
+    destroy: (handle) => module._ktxTexture2_Destroy(handle),
+    transcode: (handle, format, flags) => module._ktxTexture2_TranscodeBasis(handle, format, flags),
+    needsTranscoding: (handle) => module._ktxTexture2_NeedsTranscoding(handle),
+    getData: (handle) => module._ktx_get_data(handle),
+    getDataSize: (handle) => module._ktx_get_data_size(handle),
+    getWidth: (handle) => module._ktx_get_base_width(handle),
+    getHeight: (handle) => module._ktx_get_base_height(handle),
+    getLevels: (handle) => module._ktx_get_num_levels(handle),
+    getOffset: (handle, level, layer, face) => module._ktx_get_image_offset(handle, level, layer, face),
+    errorString: (code) => module.UTF8ToString(module._ktxErrorString(code)),
   };
 }
 
@@ -1820,25 +1822,29 @@ self.onmessage = async function(e) {
    * Based on old working implementation from Ktx2ProgressiveVanilla.js
    */
   private createKtxApi(module: KtxModule): KtxApi {
-    this.log(this.LOG_VERBOSE, '[KTX2] Creating cwrap wrappers for C API...');
+    this.log(this.LOG_VERBOSE, '[KTX2] Creating direct C API wrappers (no cwrap)...');
 
+    // Use direct exported C functions — works regardless of EXPORTED_RUNTIME_METHODS
     const api: KtxApi = {
-      malloc: module.cwrap('malloc', 'number', ['number']),
-      free: module.cwrap('free', null, ['number']),
-      createFromMemory: module.cwrap('ktxTexture2_CreateFromMemory', 'number', ['number', 'number', 'number', 'number']),
-      destroy: module.cwrap('ktxTexture2_Destroy', null, ['number']),
-      transcode: module.cwrap('ktxTexture2_TranscodeBasis', 'number', ['number', 'number', 'number']),
-      needsTranscoding: module.cwrap('ktxTexture2_NeedsTranscoding', 'number', ['number']),
-      getData: module.cwrap('ktx_get_data', 'number', ['number']),
-      getDataSize: module.cwrap('ktx_get_data_size', 'number', ['number']),
-      getWidth: module.cwrap('ktx_get_base_width', 'number', ['number']),
-      getHeight: module.cwrap('ktx_get_base_height', 'number', ['number']),
-      getLevels: module.cwrap('ktx_get_num_levels', 'number', ['number']),
-      getOffset: module.cwrap('ktx_get_image_offset', 'number', ['number', 'number', 'number', 'number']),
-      errorString: module.cwrap('ktxErrorString', 'string', ['number']),
+      malloc: (size: number) => module._malloc(size),
+      free: (ptr: number) => module._free(ptr),
+      createFromMemory: (dataPtr: number, dataSize: number, flags: number, outPtr: number) =>
+        module._ktxTexture2_CreateFromMemory(dataPtr, dataSize, flags, outPtr),
+      destroy: (handle: number) => module._ktxTexture2_Destroy(handle),
+      transcode: (handle: number, format: number, flags: number) =>
+        module._ktxTexture2_TranscodeBasis(handle, format, flags),
+      needsTranscoding: (handle: number) => module._ktxTexture2_NeedsTranscoding(handle),
+      getData: (handle: number) => module._ktx_get_data(handle),
+      getDataSize: (handle: number) => module._ktx_get_data_size(handle),
+      getWidth: (handle: number) => module._ktx_get_base_width(handle),
+      getHeight: (handle: number) => module._ktx_get_base_height(handle),
+      getLevels: (handle: number) => module._ktx_get_num_levels(handle),
+      getOffset: (handle: number, level: number, layer: number, face: number) =>
+        module._ktx_get_image_offset(handle, level, layer, face),
+      errorString: (code: number) => module.UTF8ToString(module._ktxErrorString(code)),
     };
 
-    this.log(this.LOG_VERBOSE, '[KTX2] cwrap API created:', Object.keys(api));
+    this.log(this.LOG_VERBOSE, '[KTX2] Direct C API created:', Object.keys(api));
 
     return api;
   }
