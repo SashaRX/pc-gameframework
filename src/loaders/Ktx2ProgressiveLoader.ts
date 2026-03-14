@@ -28,7 +28,7 @@ import { GpuFormatDetector, TextureFormat } from './GpuFormatDetector';
 import { alignValue, readU64asNumber, writeU64 } from './utils/alignment';
 import { parseDFDColorSpace } from './utils/colorspace';
 import { LibktxLoader } from '../libs/libktx/LibktxLoader';
-import { FRAMEWORK_VERSION, BUILD_COUNT } from '../version';
+import { FRAMEWORK_VERSION } from '../version';
 import { WORKER_CODE } from './worker-inline';
 
 export class Ktx2ProgressiveLoader {
@@ -380,7 +380,7 @@ fn getAlbedo() {
    */
   async initialize(): Promise<void> {
     this.log(this.LOG_INFO, '[KTX2] Initializing loader...');
-    console.log('[SYSTEM] pc-gameframework v' + FRAMEWORK_VERSION + ' | build #' + BUILD_COUNT);
+    console.log('[SYSTEM] pc-gameframework: ' + FRAMEWORK_VERSION);
 
     // Validate required URLs
     if (!this.config.libktxModuleUrl || !this.config.libktxWasmUrl) {
@@ -420,7 +420,7 @@ fn getAlbedo() {
       const success = await this.initWorker();
       const dt = (performance.now() - t0).toFixed(0);
       if (success) {
-        console.log(`[SYSTEM] libktx worker ready (${dt}ms) — ${this.config.libktxModuleUrl}`);
+        console.log(`[SYSTEM] libktx worker: ${dt}ms — ${this.config.libktxModuleUrl}`);
       } else {
         this.logWarn('[KTX2] Worker initialization failed, will use main thread');
       }
@@ -431,7 +431,7 @@ fn getAlbedo() {
       const t0 = performance.now();
       await this.initMainThreadModule();
       const dt = (performance.now() - t0).toFixed(0);
-      console.log(`[SYSTEM] libktx main-thread ready (${dt}ms) — ${this.config.libktxModuleUrl}`);
+      console.log(`[SYSTEM] libktx main-thread: ${dt}ms — ${this.config.libktxModuleUrl}`);
     }
 
     this.log(this.LOG_INFO, '[KTX2] Loader ready');
