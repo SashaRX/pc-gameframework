@@ -83,18 +83,6 @@ export interface Ktx2LoaderConfig {
 
   /** Cache full KTX2 file (requires assembleFullKtx) */
   cacheFullKtx?: boolean;
-
-  // ---- Debug / demo ----
-
-  /**
-   * Slow-motion mode for observing progressive loading.
-   * Overrides stepDelayMs with debugStepDelayMs between each mip level.
-   * Set to false (or remove) for production.
-   */
-  debugSlowMode?: boolean;
-
-  /** Delay between mip levels in debug slow mode (ms, default 2000) */
-  debugStepDelayMs?: number;
 }
 
 // ============================================================================
