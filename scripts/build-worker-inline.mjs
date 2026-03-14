@@ -20,7 +20,14 @@ const loaderPath   = path.join(__dirname, '../build/esm-temp/loaders/Ktx2Progres
 const inlinePath   = path.join(__dirname, '../build/esm-temp/loaders/worker-inline.js');
 
 // Read worker code
-const workerCode = fs.readFileSync(workerPath, 'utf8');
+let workerCode = fs.readFileSync(workerPath, 'utf8');
+
+// Strip ES module artifacts — Blob workers run as classic scripts, export/import are invalid
+workerCode = workerCode
+  .replace(/^\s*export\s+\{[^}]*\};?\s*$/gm, '')   // export {}
+  .replace(/^\s*export\s+default\s+/gm, '')           // export default
+  .replace(/^\s*export\s+(const|let|var|function|class)\s+/gm, '$1 ') // export const/let/etc
+  .trim();
 
 // Escape for embedding in a template literal
 const escaped = workerCode
