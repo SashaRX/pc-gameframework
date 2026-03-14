@@ -1,393 +1,270 @@
 #!/usr/bin/env node
-
 /**
- * ПОЛНАЯ ЧИСТКА И ПУШ
+ * CLEAN AND PUSH — framework-aware
  *
- * Этот скрипт:
- * 1. Чистит локальную папку build полностью
- * 2. Получает список ВСЕХ файлов в PlayCanvas
- * 3. Удаляет ВСЁ что не должно там быть
- * 4. Билдит проект
- * 5. Пушит только нужные файлы
+ * Стратегия защиты пользовательских скриптов:
+ *
+ * 1. ПАПКИ: чистка работает только внутри FRAMEWORK_FOLDERS.
+ *    Всё что вне этих папок — никогда не трогается.
+ *
+ * 2. ТЕГИ: каждый запушенный фреймворком файл помечается тегом
+ *    "framework-managed" через PlayCanvas REST API.
+ *    При чистке удаляются ТОЛЬКО файлы с этим тегом которых
+ *    нет в текущей сборке.
+ *
+ * Пользовательские скрипты защищены обоими способами одновременно.
  */
 
 const { execSync } = require('child_process');
-const fs = require('fs');
+const fs   = require('fs');
 const path = require('path');
+const https = require('https');
 
-const BUILD_DIR = 'build/esm';
+// ─── конфиг ──────────────────────────────────────────────────────────────────
+const BUILD_DIR    = 'build/esm';
+const TAG          = 'framework-managed';
+const PC_API_KEY   = 'nR52SL5LoTT327VWAPzRcsETR6yUixEC';
+const PROJECT_ID   = 1416468;
+const BRANCH_ID    = 'aa5b09b6-83d5-48e0-a7b3-fe1fb721c935';
+const PC_API_BASE  = 'https://playcanvas.com/api';
 
-// ============================================================================
-// WHITELIST - только эти файлы/папки ДОЛЖНЫ быть в PlayCanvas
-// Всё остальное будет УДАЛЕНО
-// ============================================================================
-const ALLOWED_PATHS = [
-  // libs
+// Папки которыми ВЛАДЕЕТ фреймворк — чистка работает только здесь
+const FRAMEWORK_FOLDERS = [
   'libs/',
-  'libs/libktx/',
-  'libs/libktx/LibktxLoader.mjs',
-  'libs/meshoptimizer/',
-  'libs/meshoptimizer/MeshoptLoader.mjs',
-  'libs/meshoptimizer/index.mjs',
-  'libs/meshoptimizer/meshopt_decoder.mjs',
-
-  // loaders
   'loaders/',
-  'loaders/GpuFormatDetector.mjs',
-  'loaders/Ktx2ProgressiveLoader.mjs',
-  'loaders/KtxCacheManager.mjs',
-  'loaders/MemoryPool.mjs',
-  'loaders/ktx2-types.mjs',
-  'loaders/utils/',
-  'loaders/utils/alignment.mjs',
-  'loaders/utils/colorspace.mjs',
-  'loaders/worker-inline.mjs',
-
-  // scripts
-  'scripts/',
-  'scripts/Ktx2LoaderScript.mjs',
-  'scripts/StreamedTextureScript.mjs',
-  'scripts/StreamingManagerScript.mjs',
-  'scripts/OrbitCamera.mjs',  // Пользовательский скрипт
-
-  // streaming
-  'streaming/',
-  'streaming/AssetManifest.mjs',
-  'streaming/CacheManager.mjs',
-  'streaming/StreamingManager.mjs',
-  'streaming/index.mjs',
-  'streaming/types.mjs',
-  'streaming/loaders/',
-  'streaming/loaders/MaterialLoader.mjs',
-  'streaming/loaders/ModelLoader.mjs',
-  'streaming/loaders/TextureLoader.mjs',
-  'streaming/loaders/index.mjs',
-
-  // systems
-  'systems/',
-  'systems/streaming/',
-  'systems/streaming/CategoryManager.mjs',
-  'systems/streaming/MemoryTracker.mjs',
-  'systems/streaming/PriorityQueue.mjs',
-  'systems/streaming/SimpleScheduler.mjs',
-  'systems/streaming/TextureHandle.mjs',
-  'systems/streaming/TextureRegistry.mjs',
-  'systems/streaming/TextureStreamingManager.mjs',
-  'systems/streaming/index.mjs',
-  'systems/streaming/types.mjs',
-
-  // workers
   'workers/',
-  'workers/ktx-transcode.worker.mjs'
+  'systems/',
+  'streaming/',
 ];
 
-// Файлы которые ТОЧНО надо удалить (известные мусорные файлы)
-const KNOWN_GARBAGE = [
-  // Старые файлы в корне
-  'Ktx2LoaderScript.mjs',
-  'libktx.mjs',
-  'libktx.wasm',
-  'meshopt_decoder.mjs',
-  'LibktxLoader.mjs',
-  'MeshoptLoader.mjs',
+// Файлы фреймворка вне папок (если вдруг есть в корне)
+const FRAMEWORK_ROOT_FILES = [];
 
-  // Старые папки
-  'ktx2-loader',
-  'meshopt-loader',
+// ─── PlayCanvas REST API helpers ──────────────────────────────────────────────
+function pcRequest(method, urlPath, body = null) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(PC_API_BASE + urlPath);
+    const options = {
+      hostname: url.hostname,
+      path: url.pathname + url.search,
+      method,
+      headers: {
+        'Authorization': `Bearer ${PC_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+    };
 
-  // Любые .wasm файлы
-  'libs/libktx/libktx.wasm',
-  'libs/libktx/libktx.mjs',
-];
-
-/**
- * Получить список файлов на сервере PlayCanvas которых нет локально
- * Используем diffAll чтобы найти "Remote Files Missing on Local"
- */
-function getRemoteOnlyFiles() {
-  console.log('📋 Получаю список файлов в PlayCanvas...\n');
-
-  try {
-    const output = execSync('node node_modules/playcanvas-sync/bin/pcsync.js diffAll', {
-      cwd: process.cwd(),
-      encoding: 'utf8'
+    const req = https.request(options, res => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); }
+        catch { resolve(data); }
+      });
     });
 
-    // Ищем секцию "Remote Files Missing on Local"
-    const lines = output.split('\n');
-    const files = [];
-    let inRemoteSection = false;
-
-    for (const line of lines) {
-      if (line.includes('Remote Files Missing on Local')) {
-        inRemoteSection = true;
-        continue;
-      }
-      if (line.includes('----') && inRemoteSection) {
-        // Следующая секция - выходим
-        break;
-      }
-      if (inRemoteSection && line.trim()) {
-        files.push(line.trim());
-      }
-    }
-
-    console.log(`   Найдено ${files.length} файлов только на сервере\n`);
-    return files;
-  } catch (error) {
-    console.log('⚠️  Не удалось получить список файлов:', error.message);
-    // Пробуем прочитать stdout даже если была ошибка
-    if (error.stdout) {
-      const lines = error.stdout.toString().split('\n');
-      const files = [];
-      let inRemoteSection = false;
-
-      for (const line of lines) {
-        if (line.includes('Remote Files Missing on Local')) {
-          inRemoteSection = true;
-          continue;
-        }
-        if (line.includes('----') && inRemoteSection) {
-          break;
-        }
-        if (inRemoteSection && line.trim()) {
-          files.push(line.trim());
-        }
-      }
-      return files;
-    }
-    return [];
-  }
+    req.on('error', reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
 }
 
-/**
- * Удалить файл из PlayCanvas
- */
-function removeFromPlayCanvas(filePath) {
-  try {
-    execSync(`node node_modules/playcanvas-sync/bin/pcsync.js rm "${filePath}"`, {
-      cwd: process.cwd(),
-      stdio: 'pipe'
-    });
-    console.log(`   🗑️  Удалён: ${filePath}`);
-    return true;
-  } catch (error) {
-    // Файл может не существовать
-    return false;
+async function getAllAssets() {
+  const assets = [];
+  let skip = 0;
+  const limit = 100;
+
+  while (true) {
+    const data = await pcRequest(
+      'GET',
+      `/projects/${PROJECT_ID}/assets?branchId=${BRANCH_ID}&limit=${limit}&skip=${skip}`
+    );
+    const batch = data.result || [];
+    assets.push(...batch);
+    if (assets.length >= (data.pagination?.total ?? 0) || batch.length < limit) break;
+    skip += limit;
   }
+
+  return assets;
 }
 
-/**
- * Проверить, разрешён ли путь
- */
-function isPathAllowed(filePath) {
-  // Нормализуем путь
-  const normalized = filePath.replace(/\\/g, '/');
-
-  // Проверяем точное совпадение или что путь начинается с разрешённой папки
-  for (const allowed of ALLOWED_PATHS) {
-    if (normalized === allowed || normalized === allowed.replace(/\/$/, '')) {
-      return true;
-    }
-    // Если allowed это папка (кончается на /), проверяем что файл внутри
-    if (allowed.endsWith('/') && normalized.startsWith(allowed)) {
-      return true;
-    }
-  }
-
-  return false;
+async function setAssetTag(assetId, currentTags) {
+  if (currentTags.includes(TAG)) return; // уже помечен
+  const newTags = [...currentTags, TAG];
+  await pcRequest('PUT', `/assets/${assetId}`, { tags: newTags });
 }
 
-/**
- * Очистить локальную папку build
- */
-function cleanLocalBuild() {
-  console.log('🧹 Чищу локальную папку build...\n');
-
-  if (fs.existsSync('build')) {
-    fs.rmSync('build', { recursive: true, force: true });
-    console.log('   ✓ build/ удалена\n');
-  } else {
-    console.log('   ✓ build/ уже чистая\n');
-  }
+async function deleteAsset(assetId) {
+  await pcRequest('DELETE', `/assets/${assetId}?branchId=${BRANCH_ID}`);
 }
 
-/**
- * Очистить PlayCanvas от мусора
- */
-function cleanPlayCanvas() {
-  console.log('🧹 Чищу PlayCanvas от мусора...\n');
-
-  let removedCount = 0;
-
-  // Сначала удаляем известный мусор
-  console.log('   Удаляю известные мусорные файлы:');
-  for (const garbage of KNOWN_GARBAGE) {
-    if (removeFromPlayCanvas(garbage)) {
-      removedCount++;
-    }
-  }
-
-  // Получаем список файлов которые есть на сервере но нет локально
-  const remoteOnlyFiles = getRemoteOnlyFiles();
-
-  if (remoteOnlyFiles.length > 0) {
-    console.log(`   Проверяю ${remoteOnlyFiles.length} файлов только на сервере...`);
-
-    // Удаляем файлы которых нет в whitelist
-    for (const file of remoteOnlyFiles) {
-      // Удаляем если это мусор или не в whitelist
-      const isGarbage = KNOWN_GARBAGE.includes(file);
-      const isAllowed = isPathAllowed(file);
-
-      if (isGarbage || !isAllowed) {
-        console.log(`   ❌ Удаляю: ${file}${isGarbage ? ' (мусор)' : ' (не в whitelist)'}`);
-        if (removeFromPlayCanvas(file)) {
-          removedCount++;
-        }
-      } else {
-        console.log(`   ✓ Оставляю: ${file}`);
-      }
-    }
-  }
-
-  console.log(`\n   ✓ Удалено ${removedCount} файлов\n`);
-  return removedCount;
+// ─── helpers ──────────────────────────────────────────────────────────────────
+function isFrameworkPath(filePath) {
+  const p = filePath.replace(/\\/g, '/');
+  if (FRAMEWORK_ROOT_FILES.includes(p)) return true;
+  return FRAMEWORK_FOLDERS.some(f => p.startsWith(f));
 }
 
-/**
- * Собрать проект
- */
-function buildProject() {
-  console.log('🔨 Собираю проект...\n');
-
-  try {
-    execSync('npm run build:esm', {
-      cwd: process.cwd(),
-      stdio: 'inherit'
-    });
-    console.log('\n   ✓ Сборка завершена\n');
-    return true;
-  } catch (error) {
-    console.error('\n   ❌ Ошибка сборки!\n');
-    return false;
-  }
-}
-
-/**
- * Рекурсивно найти все файлы
- */
 function getAllFiles(dir, baseDir = dir) {
   const files = [];
-
   if (!fs.existsSync(dir)) return files;
-
-  const items = fs.readdirSync(dir, { withFileTypes: true });
-
-  for (const item of items) {
-    const fullPath = path.join(dir, item.name);
-
+  for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, item.name);
     if (item.isDirectory()) {
-      files.push(...getAllFiles(fullPath, baseDir));
+      files.push(...getAllFiles(full, baseDir));
     } else {
-      const relativePath = path.relative(baseDir, fullPath);
-      files.push(relativePath);
+      files.push(path.relative(baseDir, full).replace(/\\/g, '/'));
     }
   }
-
   return files;
 }
 
-/**
- * Копировать raw файлы (не компилируемые TypeScript)
- */
+function pcsync(cmd) {
+  try {
+    return execSync(`node node_modules/playcanvas-sync/bin/pcsync.js ${cmd}`, {
+      cwd: process.cwd(), stdio: 'pipe', encoding: 'utf8'
+    });
+  } catch (e) {
+    return e.stdout || '';
+  }
+}
+
+// ─── шаги ─────────────────────────────────────────────────────────────────────
+function cleanLocalBuild() {
+  console.log('1. Чищу локальную build/...');
+  if (fs.existsSync('build')) {
+    fs.rmSync('build', { recursive: true, force: true });
+  }
+  console.log('   ✓\n');
+}
+
+function buildProject() {
+  console.log('2. Собираю проект...');
+  execSync('npm run build:esm', { cwd: process.cwd(), stdio: 'inherit' });
+  console.log('   ✓\n');
+}
+
 function copyRawFiles() {
   const rawFiles = [
-    {
-      src: 'src/libs/meshoptimizer/meshopt_decoder.mjs',
-      dest: 'build/esm/libs/meshoptimizer/meshopt_decoder.mjs'
-    }
+    { src: 'src/libs/meshoptimizer/meshopt_decoder.mjs',
+      dest: 'build/esm/libs/meshoptimizer/meshopt_decoder.mjs' },
   ];
-
   for (const { src, dest } of rawFiles) {
     if (fs.existsSync(src)) {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.copyFileSync(src, dest);
-      console.log(`   ✓ Скопирован: ${src}`);
     }
   }
 }
 
-/**
- * Пушить файлы в PlayCanvas
- */
-function pushFiles() {
-  console.log('📤 Пушу файлы в PlayCanvas...\n');
-
-  // Копируем raw файлы
+async function pushAndTag() {
+  console.log('3. Пушу файлы и расставляю теги...');
   copyRawFiles();
 
   const files = getAllFiles(BUILD_DIR);
+  console.log(`   Файлов к пушу: ${files.length}`);
 
-  if (files.length === 0) {
-    console.error('   ❌ Нет файлов для пуша!');
-    return false;
-  }
+  // Получаем текущие асеты чтобы знать теги
+  const allAssets = await getAllAssets();
+  const assetByName = new Map(allAssets.map(a => [a.name, a]));
 
-  console.log(`   Найдено ${files.length} файлов:\n`);
-
-  let successCount = 0;
-  let failCount = 0;
+  let ok = 0, fail = 0;
 
   for (const file of files) {
-    const pcPath = file.replace(/\\/g, '/');
-
     try {
-      execSync(`node node_modules/playcanvas-sync/bin/pcsync.js push "${pcPath}"`, {
-        cwd: process.cwd(),
-        stdio: 'pipe'
-      });
-      console.log(`   ✓ ${pcPath}`);
-      successCount++;
-    } catch (error) {
-      console.error(`   ❌ ${pcPath}: ${error.message}`);
-      failCount++;
+      pcsync(`push "${file}"`);
+
+      // Ищем асет по имени файла (без пути)
+      const name = path.basename(file);
+      // Небольшая пауза чтобы API успел увидеть новый файл
+      await new Promise(r => setTimeout(r, 200));
+
+      // Перезапрашиваем если нужно
+      let asset = assetByName.get(name);
+      if (!asset) {
+        // Файл только что создан — ищем заново
+        const fresh = await pcRequest(
+          'GET',
+          `/projects/${PROJECT_ID}/assets?branchId=${BRANCH_ID}&limit=5&search=${encodeURIComponent(name)}`
+        );
+        asset = (fresh.result || []).find(a => a.name === name);
+      }
+
+      if (asset) {
+        await setAssetTag(asset.id, asset.tags || []);
+        console.log(`   ✓ ${file}  [${TAG}]`);
+      } else {
+        console.log(`   ✓ ${file}  (тег не выставлен — асет не найден в API)`);
+      }
+      ok++;
+    } catch (e) {
+      console.error(`   ✗ ${file}: ${e.message}`);
+      fail++;
     }
   }
 
-  console.log(`\n   ✅ Запушено: ${successCount}, ❌ Ошибок: ${failCount}\n`);
-  return failCount === 0;
+  console.log(`\n   Запушено: ${ok}, ошибок: ${fail}\n`);
 }
 
-/**
- * MAIN
- */
-function main() {
-  console.log('\n');
-  console.log('╔══════════════════════════════════════════════════════════════╗');
-  console.log('║           ПОЛНАЯ ЧИСТКА И ПУШ                                ║');
-  console.log('╚══════════════════════════════════════════════════════════════╝');
-  console.log('\n');
+async function cleanPlayCanvas() {
+  console.log('4. Чищу устаревшие framework файлы в PlayCanvas...');
 
-  // 1. Сначала билдим (чтобы diffAll работал)
+  // Текущие файлы сборки
+  const buildFiles = new Set(getAllFiles(BUILD_DIR));
+
+  // Все асеты в PlayCanvas
+  const allAssets = await getAllAssets();
+
+  let removed = 0;
+
+  for (const asset of allAssets) {
+    const name = asset.name;
+    const tags = asset.tags || [];
+
+    // Условие удаления:
+    // 1. Файл помечен нашим тегом (мы его загружали)
+    // 2. Путь находится в framework-папке (доп. защита)
+    // 3. Файла НЕТ в текущей сборке
+    if (!tags.includes(TAG)) continue;
+
+    // Ищем соответствие в build по имени файла
+    const inBuild = [...buildFiles].some(f => path.basename(f) === name);
+    if (inBuild) continue;
+
+    // Дополнительно проверяем что это framework-папка (не трогаем случайно помеченное)
+    // Путь в PlayCanvas = относительный от target subdir
+    const assetPath = asset.path ? asset.path.join('/') + '/' + name : name;
+    if (!isFrameworkPath(assetPath) && !FRAMEWORK_ROOT_FILES.includes(name)) {
+      console.log(`   ~ пропускаю ${name} (не в framework-папке)`);
+      continue;
+    }
+
+    try {
+      await deleteAsset(asset.id);
+      console.log(`   🗑  Удалён: ${name}`);
+      removed++;
+    } catch (e) {
+      console.log(`   ✗ Не удалось удалить ${name}: ${e.message}`);
+    }
+  }
+
+  console.log(`\n   Удалено устаревших файлов: ${removed}\n`);
+}
+
+// ─── main ─────────────────────────────────────────────────────────────────────
+async function main() {
+  console.log('\n╔══════════════════════════════════════════╗');
+  console.log('║  FRAMEWORK CLEAN & PUSH                  ║');
+  console.log('╚══════════════════════════════════════════╝\n');
+
   cleanLocalBuild();
+  buildProject();
+  await cleanPlayCanvas();   // сначала чистим старое
+  await pushAndTag();        // потом пушим новое с тегами
 
-  if (!buildProject()) {
-    process.exit(1);
-  }
-
-  // 2. Теперь чистим PlayCanvas (diffAll будет работать)
-  cleanPlayCanvas();
-
-  // 3. Пушим
-  if (!pushFiles()) {
-    console.error('❌ Пуш завершился с ошибками');
-    process.exit(1);
-  }
-
-  console.log('═══════════════════════════════════════════════════════════════');
-  console.log('🎉 ГОТОВО! Проект очищен и запушен.');
-  console.log('═══════════════════════════════════════════════════════════════\n');
+  console.log('══════════════════════════════════════════');
+  console.log('  Готово.');
+  console.log('══════════════════════════════════════════\n');
 }
 
-main();
+main().catch(e => { console.error(e); process.exit(1); });
