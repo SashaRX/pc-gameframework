@@ -160,7 +160,7 @@ export class LibktxLoader {
       const wrappedCode = `
         (function() {
           ${modifiedCode}
-          return typeof LIBKTX !== 'undefined' ? LIBKTX : (typeof createKtxModule !== 'undefined' ? createKtxModule : null);
+          return typeof createKtxReadModule !== 'undefined' ? createKtxReadModule : (typeof LIBKTX !== 'undefined' ? LIBKTX : (typeof createKtxModule !== 'undefined' ? createKtxModule : null));
         })();
       `;
 
