@@ -2258,6 +2258,13 @@ fn getAlbedo() {
         webglTexture = gl.createTexture();
         if ((texture as any).impl) {
           (texture as any).impl._glTexture = webglTexture;
+          // Set impl properties that PlayCanvas expects for rendering.
+          // Without _glTarget, bindTexture() passes undefined → INVALID_ENUM.
+          // Without _glInternalFormat, upload() uses wrong format for compressed data.
+          (texture as any).impl._glTarget = gl.TEXTURE_2D;
+          (texture as any).impl._glFormat = gl.RGBA;
+          (texture as any).impl._glInternalFormat = internalFormat;
+          (texture as any).impl._glPixelType = gl.UNSIGNED_BYTE;
         }
         if (!webglTexture) {
           this.logError('[KTX2] Failed to create WebGL texture');
@@ -2302,6 +2309,14 @@ fn getAlbedo() {
           0,
           result.data
         );
+
+        // Store data in _levels so PlayCanvas upload() won't crash with null mipObject.
+        // The engine's upload loop enters mipLevel=0 unconditionally and calls
+        // compressedTexImage2D(... mipObject) — null there causes TypeError.
+        const levels = (texture as any)._levels;
+        if (levels && level < levels.length) {
+          levels[level] = result.data;
+        }
       } else {
         // For uncompressed RGBA, use texImage2D
         const useSrgb = this.config.isSrgb;
@@ -2334,6 +2349,12 @@ fn getAlbedo() {
 
       // Restore previous binding
       gl.bindTexture(gl.TEXTURE_2D, prevBinding);
+
+      // Clear PlayCanvas dirty flags to prevent redundant re-upload.
+      // We manage GL uploads directly; engine re-upload on compressed path
+      // would call compressedTexImage2D with potentially incomplete _levels data.
+      (texture as any)._needsUpload = false;
+      (texture as any)._needsMipmapsUpload = false;
 
       // Update shader uniform for LOD clamping
       const customMaterial = (this as any)._customMaterial;
