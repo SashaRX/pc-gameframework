@@ -403,6 +403,22 @@ fn getAlbedo() {
     // Register custom shader chunk for progressive LOD clamping
     this.createShaderChunk();
 
+    // Set safe default LOD uniforms on all existing materials.
+    // The global diffusePS chunk references material_minAvailableLod / material_maxAvailableLod,
+    // but materials without KTX2 textures never receive these uniforms — causing
+    // "Value was not set when assigning to uniform" warnings on WebGPU.
+    const renderComps = this.app.root.findComponents('render') as any[];
+    const modelComps = this.app.root.findComponents('model') as any[];
+    for (const comp of [...renderComps, ...modelComps]) {
+      const instances = comp.meshInstances || [];
+      for (const mi of instances) {
+        if (mi.material && mi.material.setParameter) {
+          mi.material.setParameter('material_minAvailableLod', 0);
+          mi.material.setParameter('material_maxAvailableLod', 0);
+        }
+      }
+    }
+
     // Initialize cache
     if (this.config.enableCache) {
       this.cacheManager = new KtxCacheManager('ktx2-cache', 2);
