@@ -847,9 +847,19 @@ fn getAlbedo() {
     // Shader LOD clamp handles upper mips, but hardware trilinear needs real small mips.
     const device = this.app.graphicsDevice;
     if (device.isWebGPU && startLevel < probe.levelCount - 1) {
+      // For BC compressed: minimum mip is 4x4 (one block). Skip sub-block mips.
+      const minMipSize = transcodeConfig.isCompressed ? 4 : 1;
       for (let sm = startLevel + 1; sm < probe.levelCount; sm++) {
         const smInfo = probe.levels[sm];
         if (!smInfo) continue;
+
+        // Skip sub-block mips for compressed formats
+        const smW = Math.max(1, probe.width >> sm);
+        const smH = Math.max(1, probe.height >> sm);
+        if (smW < minMipSize || smH < minMipSize) {
+          this.log(this.LOG_VERBOSE, `[KTX2] Skip sub-block mip ${sm}: ${smW}x${smH}`);
+          continue;
+        }
 
         let smResult: Ktx2TranscodeResult | undefined;
 
