@@ -2168,23 +2168,30 @@ void getAlbedo() {
         // Write real data into the slot
         levels[level] = result.data;
 
-        // Fill ALL lower-quality mips (level+1 .. maxLevel) with placeholder data
-        // so GPU never hits empty mip slots. Use repeating first block from loaded data.
-        // For BC7: 1 block = 16 bytes = 4x4 pixels.
-        const blockSize = 16; // BC7 block size
+        // Track which levels have REAL (transcoded) data vs placeholder
+        if (!(texture as any)._realMips) {
+          (texture as any)._realMips = new Set<number>();
+        }
+        (texture as any)._realMips.add(level);
+
+        // Fill ALL empty/placeholder mip slots so GPU never hits uninitialized mips.
+        // Both ABOVE (0..level-1) and BELOW (level+1..max).
+        // For BC7/BC1: 1 block = 4x4 pixels. BC7=16 bytes, BC1=8 bytes.
+        const isBC1 = (texture.format === 8 || texture.format === 54); // PIXELFORMAT_DXT1 or DXT1_SRGB
+        const blockSize = isBC1 ? 8 : 16;
         const firstBlock = result.data.slice(0, blockSize);
         const baseW = texture.width;
         const baseH = texture.height;
+        const realMips = (texture as any)._realMips as Set<number>;
 
-        for (let m = level + 1; m < levels.length; m++) {
-          if (levels[m] !== null) continue; // already has real data
+        for (let m = 0; m < levels.length; m++) {
+          if (realMips.has(m)) continue; // has real transcoded data — never overwrite
           const mipW = Math.max(1, baseW >> m);
           const mipH = Math.max(1, baseH >> m);
           const blocksX = Math.max(1, Math.ceil(mipW / 4));
           const blocksY = Math.max(1, Math.ceil(mipH / 4));
           const mipSize = blocksX * blocksY * blockSize;
           const placeholder = new Uint8Array(mipSize);
-          // Fill with repeating first block (uniform color)
           for (let offset = 0; offset < mipSize; offset += blockSize) {
             placeholder.set(firstBlock, offset);
           }
@@ -2203,7 +2210,7 @@ void getAlbedo() {
         }
 
         this.log(this.LOG_VERBOSE,
-          `[KTX2] WebGPU: uploaded level ${level} + filled mips [${level + 1}..${levels.length - 1}] ` +
+          `[KTX2] WebGPU: uploaded level ${level} + filled all empty mips ` +
           `${result.width}x${result.height} (${(result.data.byteLength / 1024).toFixed(2)} KB)`
         );
         return;
