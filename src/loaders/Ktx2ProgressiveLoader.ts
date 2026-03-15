@@ -880,13 +880,12 @@ fn getAlbedo() {
         }
 
         if (smResult) {
-          if (sm > maxAvailableLod) maxAvailableLod = sm;
-          this.minLoadedLod = minAvailableLod;
-          this.maxLoadedLod = maxAvailableLod;
-
+          // DON'T update maxAvailableLod — small mips are GPU slot fillers,
+          // shader LOD clamp should NOT sample below startLevel.
+          // Hardware trilinear within [minAvailableLod, startLevel] is correct.
           this.uploadMipLevel(
             texture, sm, smResult,
-            minAvailableLod, maxAvailableLod,
+            minAvailableLod, startLevel,  // clamp to startLevel, not sm
             transcodeConfig.isCompressed,
             transcodeConfig.isCompressed && this.gpuFormatDetector
               ? this.gpuFormatDetector.getInternalFormat(this.getTextureFormatFromTranscodeFormat(transcodeConfig.format), this._textureIsSrgb)
