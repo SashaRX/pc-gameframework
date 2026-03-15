@@ -249,17 +249,12 @@ export class Ktx2ProgressiveLoader {
   private createShaderChunk(): void {
     const device = this.app.graphicsDevice;
 
-    // WebGPU: no custom shader chunks needed — TextureView handles mip restriction.
-    if (device.isWebGPU) {
-      this.log(this.LOG_INFO, '[KTX2] WebGPU: using standard diffusePS (TextureView for LOD)');
-      return;
-    }
-
     // ----------------------------------------------------------------
     // GLSL (WebGL2) — custom diffusePS with LOD clamping
     // ----------------------------------------------------------------
-    const glslChunks = (pc as any).ShaderChunks.get(device, 'glsl');
-    glslChunks.set('diffusePS', `
+    if (!device.isWebGPU) {
+      const glslChunks = (pc as any).ShaderChunks.get(device, 'glsl');
+      glslChunks.set('diffusePS', `
 // diffusePS — Progressive LOD with hardware anisotropic filtering
 uniform sampler2D texture_diffuseMap;
 uniform float material_minAvailableLod; // min LOD (best quality available)
@@ -270,41 +265,24 @@ void getAlbedo() {
     #ifdef STD_DIFFUSE_TEXTURE
         vec2 uv = {STD_DIFFUSE_TEXTURE_UV};
 
-        // Calculate derivatives in normalized UV space
         vec2 dudx = dFdx(uv);
         vec2 dudy = dFdy(uv);
 
-        // Get texture size at the base (best available) level
-        // This is critical for progressive loading - use minAvailableLod, not 0!
         int baseLod = int(material_minAvailableLod);
         vec2 texSize = vec2(textureSize(texture_diffuseMap, baseLod));
 
-        // Convert UV derivatives to texel space
         vec2 duvdx = dudx * texSize;
         vec2 duvdy = dudy * texSize;
 
-        // Calculate both major and minor axis for anisotropic filtering
-        // This is important for sharp angles where one axis stretches more than the other
-        float majorAxis2 = max(dot(duvdx, duvdx), dot(duvdy, duvdy));
         float minorAxis2 = min(dot(duvdx, duvdx), dot(duvdy, duvdy));
-
-        // Use the minor axis for LOD calculation to prevent over-blurring
-        // This is the key for sharp angles - we want the sharpest detail possible
         float autoLod = 0.5 * log2(max(minorAxis2, 1e-8));
 
-        // Clamp LOD to available range [minAvailableLod, maxAvailableLod]
-        // This prevents sampling from unavailable mip levels
         float targetLod = clamp(autoLod,
                                 material_minAvailableLod,
                                 material_maxAvailableLod);
 
-        // Scale derivatives to match target LOD
-        // This maintains correct filtering while staying within available mip range
         float scale = exp2(targetLod - autoLod);
 
-        // Sample with hardware anisotropic filtering + trilinear
-        // textureGrad respects BASE_LEVEL and MAX_LEVEL set via WebGL
-        // Hardware aniso will handle the major/minor axis ratio automatically
         dAlbedo = textureGrad(texture_diffuseMap, uv,
                              dudx * scale, dudy * scale).rgb;
     #endif
@@ -314,8 +292,61 @@ void getAlbedo() {
     #endif
 }
 `);
+      this.log(this.LOG_INFO, '[KTX2] GLSL shader chunk registered');
+    }
 
-    this.log(this.LOG_INFO, '[KTX2] GLSL shader chunk registered');
+    // ----------------------------------------------------------------
+    // WGSL (WebGPU) — same LOD clamping via textureSampleGrad.
+    // TextureView restricts visible mips; uniforms are view-relative
+    // (0 = best loaded mip inside the view).
+    // ----------------------------------------------------------------
+    if (device.isWebGPU) {
+      try {
+        const wgslChunks = (pc as any).ShaderChunks.get(device, 'wgsl');
+        wgslChunks.set('diffusePS', `
+uniform material_diffuse: vec3f;
+uniform material_minAvailableLod: f32;
+uniform material_maxAvailableLod: f32;
+
+fn getAlbedo() {
+    dAlbedo = vec3f(1.0);
+    #ifdef STD_DIFFUSE_TEXTURE
+        var uv: vec2f = {STD_DIFFUSE_TEXTURE_UV};
+
+        let dudx: vec2f = dpdx(uv);
+        let dudy: vec2f = dpdy(uv);
+
+        let baseLod: u32 = u32(uniform.material_minAvailableLod);
+        let texSize: vec2f = vec2f(textureDimensions({STD_DIFFUSE_TEXTURE_NAME}, baseLod));
+
+        let duvdx: vec2f = dudx * texSize;
+        let duvdy: vec2f = dudy * texSize;
+
+        let minorAxis2: f32 = min(dot(duvdx, duvdx), dot(duvdy, duvdy));
+        let autoLod: f32 = 0.5 * log2(max(minorAxis2, 1e-8));
+
+        let targetLod: f32 = clamp(autoLod,
+                                   uniform.material_minAvailableLod,
+                                   uniform.material_maxAvailableLod);
+
+        let scale: f32 = exp2(targetLod - autoLod);
+
+        dAlbedo = textureSampleGrad(
+            {STD_DIFFUSE_TEXTURE_NAME},
+            {STD_DIFFUSE_TEXTURE_NAME}Sampler,
+            uv, dudx * scale, dudy * scale).rgb;
+    #endif
+
+    #ifdef STD_DIFFUSE_VERTEX
+        dAlbedo = dAlbedo * saturate3(vVertexColor.{STD_DIFFUSE_VERTEX_CHANNEL});
+    #endif
+}
+`);
+        this.log(this.LOG_INFO, '[KTX2] WGSL shader chunk registered');
+      } catch (e) {
+        this.logWarn('[KTX2] Failed to register WGSL shader chunk:', e);
+      }
+    }
   }
 
   /**
@@ -346,20 +377,17 @@ void getAlbedo() {
     // Register custom shader chunk for progressive LOD clamping
     this.createShaderChunk();
 
-    // Set safe default LOD uniforms on all existing materials (WebGL only).
-    // The global GLSL diffusePS chunk references material_minAvailableLod / material_maxAvailableLod,
-    // but materials without KTX2 textures never receive these uniforms.
-    // On WebGPU no custom WGSL chunk is registered, so no defaults needed.
-    if (!device.isWebGPU) {
-      const renderComps = this.app.root.findComponents('render') as any[];
-      const modelComps = this.app.root.findComponents('model') as any[];
-      for (const comp of [...renderComps, ...modelComps]) {
-        const instances = comp.meshInstances || [];
-        for (const mi of instances) {
-          if (mi.material && mi.material.setParameter) {
-            mi.material.setParameter('material_minAvailableLod', 0);
-            mi.material.setParameter('material_maxAvailableLod', 0);
-          }
+    // Set safe default LOD uniforms on all existing materials.
+    // Both GLSL and WGSL custom diffusePS chunks reference these uniforms;
+    // materials without KTX2 textures must have them to avoid shader errors.
+    const renderComps = this.app.root.findComponents('render') as any[];
+    const modelComps = this.app.root.findComponents('model') as any[];
+    for (const comp of [...renderComps, ...modelComps]) {
+      const instances = comp.meshInstances || [];
+      for (const mi of instances) {
+        if (mi.material && mi.material.setParameter) {
+          mi.material.setParameter('material_minAvailableLod', 0);
+          mi.material.setParameter('material_maxAvailableLod', 0);
         }
       }
     }
@@ -2191,13 +2219,14 @@ void getAlbedo() {
         // upload() only sends non-null slots so partial-level state is safe.
         texture.upload();
 
-        // Update TextureView to include newly loaded mip.
-        // No LOD uniforms needed — standard textureSample works within the view.
+        // Update TextureView + LOD uniforms (view-relative) for WGSL chunk.
         const customMaterial = (this as any)._customMaterial;
         if (customMaterial && typeof (texture as any).getView === 'function') {
           const mipCount = maxAvailableLod - minAvailableLod + 1;
           const view = (texture as any).getView(minAvailableLod, mipCount);
           customMaterial._ktxView = view;
+          customMaterial.setParameter('material_minAvailableLod', 0);
+          customMaterial.setParameter('material_maxAvailableLod', mipCount - 1);
           this.log(this.LOG_VERBOSE,
             `[KTX2] WebGPU: uploaded level ${level} TextureView ` +
             `[${minAvailableLod}..${maxAvailableLod}] ${result.width}x${result.height} ` +
@@ -2369,12 +2398,15 @@ void getAlbedo() {
     const device = this.app.graphicsDevice;
 
     if (device.isWebGPU && typeof (texture as any).getView === 'function') {
-      // WebGPU: TextureView restricts visible mips.
-      // diffuseMap stays as full Texture (for shader compilation in update()),
-      // but we patch _updateMap so every frame it binds our TextureView instead.
+      // WebGPU: TextureView restricts visible mips + WGSL chunk does LOD clamping.
+      // LOD uniforms are view-relative: 0 = best loaded mip, mipCount-1 = worst.
       const mipCount = maxLod - minLod + 1;
       let activeView = (texture as any).getView(minLod, mipCount);
       (customMaterial as any)._ktxView = activeView;
+
+      // View-relative LOD uniforms for WGSL textureSampleGrad chunk
+      customMaterial.setParameter('material_minAvailableLod', 0);
+      customMaterial.setParameter('material_maxAvailableLod', mipCount - 1);
 
       // Patch _updateMap to intercept diffuse texture binding
       const origUpdateMap = customMaterial._updateMap.bind(customMaterial);
