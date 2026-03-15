@@ -2423,6 +2423,17 @@ fn getAlbedo() {
     // Set initial LOD range uniforms matching actually loaded levels
     customMaterial.setParameter('material_minAvailableLod', minLod);
     customMaterial.setParameter('material_maxAvailableLod', maxLod);
+
+    // WebGPU: bind a TextureView restricted to loaded mips so GPU doesn't sample empty levels.
+    // On WebGL this is handled by gl.texParameteri(TEXTURE_BASE_LEVEL/MAX_LEVEL).
+    const device = this.app.graphicsDevice;
+    if (device.isWebGPU && typeof (texture as any).getView === 'function') {
+      const mipCount = maxLod - minLod + 1;
+      const view = (texture as any).getView(minLod, mipCount);
+      customMaterial.setParameter('texture_diffuseMap', view);
+      this.log(this.LOG_VERBOSE, `[KTX2] WebGPU: bound TextureView baseMip=${minLod} count=${mipCount}`);
+    }
+
     customMaterial.update();
 
     // Apply custom material to mesh instance
