@@ -2315,6 +2315,11 @@ fn getAlbedo() {
           if (realMips.has(m)) continue;
           const mipW = Math.max(1, baseW >> m);
           const mipH = Math.max(1, baseH >> m);
+          // Skip sub-block mips for compressed formats — WebGPU can't write BC data to <4x4
+          if (isCompressed && (mipW < 4 || mipH < 4)) {
+            levels[m] = null as any; // null = upload skips this slot
+            continue;
+          }
           const blocksX = Math.max(1, Math.ceil(mipW / 4));
           const blocksY = Math.max(1, Math.ceil(mipH / 4));
           const mipSize = blocksX * blocksY * blockSize;
