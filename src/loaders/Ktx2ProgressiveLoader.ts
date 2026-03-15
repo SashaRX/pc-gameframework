@@ -2193,7 +2193,7 @@ void getAlbedo() {
         if (customMaterial && typeof (texture as any).getView === 'function') {
           const mipCount = maxAvailableLod - minAvailableLod + 1;
           const view = (texture as any).getView(minAvailableLod, mipCount);
-          customMaterial.diffuseMap = view as any;
+          customMaterial._ktxView = view;
           this.log(this.LOG_VERBOSE,
             `[KTX2] WebGPU: uploaded level ${level} TextureView ` +
             `[${minAvailableLod}..${maxAvailableLod}] ${result.width}x${result.height} ` +
@@ -2365,13 +2365,27 @@ void getAlbedo() {
     const device = this.app.graphicsDevice;
 
     if (device.isWebGPU && typeof (texture as any).getView === 'function') {
-      // WebGPU: set diffuseMap to a TextureView restricted to loaded mips.
-      // _updateMap() calls setParameter('texture_diffuseMap', this.diffuseMap) every frame,
-      // so the view must BE the diffuseMap — not set separately via setParameter.
-      // PlayCanvas bind group handles TextureView instances natively (webgpu-bind-group.js).
+      // WebGPU: TextureView restricts visible mips.
+      // diffuseMap stays as full Texture (for shader compilation in update()),
+      // but we patch _updateMap so every frame it binds our TextureView instead.
       const mipCount = maxLod - minLod + 1;
-      const view = (texture as any).getView(minLod, mipCount);
-      customMaterial.diffuseMap = view as any;
+      let activeView = (texture as any).getView(minLod, mipCount);
+      (customMaterial as any)._ktxView = activeView;
+
+      // Patch _updateMap to intercept diffuse texture binding
+      const origUpdateMap = customMaterial._updateMap.bind(customMaterial);
+      (customMaterial as any)._updateMap = function (p: string) {
+        if (p === 'diffuse') {
+          // Bind our TextureView instead of full texture
+          this._setParameter('texture_diffuseMap', this._ktxView);
+          const tname = 'diffuseMapTransform';
+          const uniform = this.getUniform(tname);
+          if (uniform) this._setParameters(uniform);
+          return;
+        }
+        origUpdateMap(p);
+      };
+
       customMaterial.update();
       this.log(this.LOG_VERBOSE, `[KTX2] WebGPU: TextureView baseMip=${minLod} count=${mipCount}`);
     } else {
