@@ -841,7 +841,60 @@ fn getAlbedo() {
       }
     }
 
-    // Texture was already applied to entity after first level load
+    // WebGPU: load all small mips (startLevel+1..maxMip) immediately.
+    // These are tiny (<30KB total) and prevent placeholder artifacts.
+    // Shader LOD clamp handles upper mips, but hardware trilinear needs real small mips.
+    const device = this.app.graphicsDevice;
+    if (device.isWebGPU && startLevel < probe.levelCount - 1) {
+      for (let sm = startLevel + 1; sm < probe.levelCount; sm++) {
+        const smInfo = probe.levels[sm];
+        if (!smInfo) continue;
+
+        let smResult: Ktx2TranscodeResult | undefined;
+
+        // Try cache first
+        if (this.config.enableCache && cachedLevels.includes(sm) && this.cacheManager) {
+          const cached = await this.cacheManager.loadMip(this.config.ktxUrl, sm, transcodeConfig.format);
+          if (cached) {
+            smResult = { width: cached.width, height: cached.height, data: cached.data };
+          }
+        }
+
+        // Load from network
+        if (!smResult) {
+          const payload = await this.fetchRange(
+            this.config.ktxUrl,
+            smInfo.byteOffset,
+            smInfo.byteOffset + smInfo.byteLength - 1
+          );
+          const miniKtx = this.repackSingleLevel(probe, sm, payload);
+          smResult = await this.transcode(miniKtx, transcodeConfig.format, transcodeConfig.isCompressed);
+
+          if (this.config.enableCache && this.cacheManager) {
+            await this.cacheManager.saveMip(this.config.ktxUrl, sm, smResult.data, {
+              width: smResult.width, height: smResult.height,
+              timestamp: Date.now(), transcodeFormat: transcodeConfig.format,
+            });
+          }
+        }
+
+        if (smResult) {
+          if (sm > maxAvailableLod) maxAvailableLod = sm;
+          this.minLoadedLod = minAvailableLod;
+          this.maxLoadedLod = maxAvailableLod;
+
+          this.uploadMipLevel(
+            texture, sm, smResult,
+            minAvailableLod, maxAvailableLod,
+            transcodeConfig.isCompressed,
+            transcodeConfig.isCompressed && this.gpuFormatDetector
+              ? this.gpuFormatDetector.getInternalFormat(this.getTextureFormatFromTranscodeFormat(transcodeConfig.format))
+              : 0
+          );
+          this.log(this.LOG_VERBOSE, `[KTX2] Small mip ${sm}: ${smResult.width}x${smResult.height}`);
+        }
+      }
+    }
     // All subsequent levels improve the quality progressively
 
     // Completion stats
@@ -2229,8 +2282,8 @@ fn getAlbedo() {
         }
         (texture as any)._realMips.add(level);
 
-        // Fill ALL empty/placeholder mip slots so GPU never hits uninitialized mips.
-        // Both ABOVE (0..level-1) and BELOW (level+1..max).
+        // Fill placeholder for ALL empty mips so GPU never hits uninitialized slots.
+        // Small mips (level+1..max) will be overwritten with real data by dedicated loop.
         // For BC7/BC1: 1 block = 4x4 pixels. BC7=16 bytes, BC1=8 bytes.
         const isBC1 = (texture.format === 8 || texture.format === 54); // PIXELFORMAT_DXT1 or DXT1_SRGB
         const blockSize = isBC1 ? 8 : 16;
@@ -2240,7 +2293,7 @@ fn getAlbedo() {
         const realMips = (texture as any)._realMips as Set<number>;
 
         for (let m = 0; m < levels.length; m++) {
-          if (realMips.has(m)) continue; // has real transcoded data — never overwrite
+          if (realMips.has(m)) continue;
           const mipW = Math.max(1, baseW >> m);
           const mipH = Math.max(1, baseH >> m);
           const blocksX = Math.max(1, Math.ceil(mipW / 4));
