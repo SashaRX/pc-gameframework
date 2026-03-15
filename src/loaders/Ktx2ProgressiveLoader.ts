@@ -189,10 +189,11 @@ export class Ktx2ProgressiveLoader {
     }
 
     // Modern desktop - BC7 (best quality)
-    if (capabilities.bptc) {
-      this.log(this.LOG_VERBOSE, '[KTX2] Using BC7_RGBA format');
-      return { format: 6, isCompressed: true }; // BC7_RGBA
-    }
+    // DIAGNOSTIC: temporarily disabled to test BC1 vs BC7 quality
+    // if (capabilities.bptc) {
+    //   this.log(this.LOG_VERBOSE, '[KTX2] Using BC7_RGBA format');
+    //   return { format: 6, isCompressed: true }; // BC7_RGBA
+    // }
 
     // Modern mobile/iOS - ETC2
     if (capabilities.etc) {
