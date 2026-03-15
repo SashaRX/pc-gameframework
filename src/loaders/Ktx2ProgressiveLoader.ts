@@ -2249,8 +2249,9 @@ fn getAlbedo() {
           const mipCount = maxAvailableLod - minAvailableLod + 1;
           const view = (texture as any).getView(minAvailableLod, mipCount);
           customMaterial.setParameter('texture_diffuseMap', view);
-          customMaterial.setParameter('material_minAvailableLod', minAvailableLod);
-          customMaterial.setParameter('material_maxAvailableLod', maxAvailableLod);
+          // View-relative: mip 0 of view = real minAvailableLod
+          customMaterial.setParameter('material_minAvailableLod', 0);
+          customMaterial.setParameter('material_maxAvailableLod', mipCount - 1);
           this.log(this.LOG_VERBOSE,
             `[KTX2] WebGPU: uploaded level ${level} via TextureView ` +
             `[${minAvailableLod}..${maxAvailableLod}] ${result.width}x${result.height} ` +
@@ -2426,11 +2427,16 @@ fn getAlbedo() {
 
     // WebGPU: bind a TextureView restricted to loaded mips so GPU doesn't sample empty levels.
     // On WebGL this is handled by gl.texParameteri(TEXTURE_BASE_LEVEL/MAX_LEVEL).
+    // IMPORTANT: inside a TextureView, mip indices are 0-based (mip 0 of view = real mip minLod).
+    // So uniforms must be relative to the view, not absolute.
     const device = this.app.graphicsDevice;
     if (device.isWebGPU && typeof (texture as any).getView === 'function') {
       const mipCount = maxLod - minLod + 1;
       const view = (texture as any).getView(minLod, mipCount);
       customMaterial.setParameter('texture_diffuseMap', view);
+      // Uniforms are view-relative: 0 = best loaded, mipCount-1 = worst loaded
+      customMaterial.setParameter('material_minAvailableLod', 0);
+      customMaterial.setParameter('material_maxAvailableLod', mipCount - 1);
       this.log(this.LOG_VERBOSE, `[KTX2] WebGPU: bound TextureView baseMip=${minLod} count=${mipCount}`);
     }
 
