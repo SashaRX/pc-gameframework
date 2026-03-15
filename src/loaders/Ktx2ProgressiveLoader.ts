@@ -295,61 +295,9 @@ void getAlbedo() {
       this.log(this.LOG_INFO, '[KTX2] GLSL shader chunk registered');
     }
 
-    // ----------------------------------------------------------------
-    // WGSL (WebGPU) — minor-axis LOD via textureSampleGrad.
-    // TextureView restricts max mip at GPU level — NO upper LOD clamp in shader.
-    // Standard diffusePS uses textureSampleBias (major-axis) → over-blur at angles.
-    // This chunk uses minor-axis derivatives → sharp, matching WebGL quality.
-    // ----------------------------------------------------------------
+    // DIAGNOSTIC: skip WGSL chunk — pure standard PlayCanvas diffusePS
     if (device.isWebGPU) {
-      try {
-        const wgslChunks = (pc as any).ShaderChunks.get(device, 'wgsl');
-        wgslChunks.set('diffusePS', `
-uniform material_diffuse: vec3f;
-
-fn getAlbedo() {
-    dAlbedo = vec3f(1.0);
-    #ifdef STD_DIFFUSE_TEXTURE
-        var uv: vec2f = {STD_DIFFUSE_TEXTURE_UV};
-
-        let dudx: vec2f = dpdx(uv);
-        let dudy: vec2f = dpdy(uv);
-
-        // Texture size at mip 0 of the view (= best loaded mip)
-        let texSize: vec2f = vec2f(textureDimensions({STD_DIFFUSE_TEXTURE_NAME}, 0));
-
-        // Derivatives in texel space
-        let duvdx: vec2f = dudx * texSize;
-        let duvdy: vec2f = dudy * texSize;
-
-        // Minor axis for LOD — prevents over-blur at oblique angles
-        let minorAxis2: f32 = min(dot(duvdx, duvdx), dot(duvdy, duvdy));
-        let autoLod: f32 = 0.5 * log2(max(minorAxis2, 1e-8));
-
-        // NO upper clamp — TextureView restricts max mip at GPU level.
-        // Only floor to 0 (can't go sharper than mip 0).
-        let targetLod: f32 = max(autoLod, 0.0);
-        let scale: f32 = exp2(targetLod - autoLod);
-
-        dAlbedo = textureSampleGrad(
-            {STD_DIFFUSE_TEXTURE_NAME},
-            {STD_DIFFUSE_TEXTURE_NAME}Sampler,
-            uv, dudx * scale, dudy * scale).rgb;
-    #endif
-
-    #ifdef STD_DIFFUSE_CONSTANT
-        dAlbedo = dAlbedo * uniform.material_diffuse.rgb;
-    #endif
-
-    #ifdef STD_DIFFUSE_VERTEX
-        dAlbedo = dAlbedo * saturate3(vVertexColor.{STD_DIFFUSE_VERTEX_CHANNEL});
-    #endif
-}
-`);
-        this.log(this.LOG_INFO, '[KTX2] WGSL shader chunk registered');
-      } catch (e) {
-        this.logWarn('[KTX2] Failed to register WGSL shader chunk:', e);
-      }
+      this.log(this.LOG_INFO, '[KTX2] WebGPU DIAG: standard diffusePS, no TextureView, no custom chunk');
     }
   }
 
@@ -2226,24 +2174,11 @@ fn getAlbedo() {
         // upload() only sends non-null slots so partial-level state is safe.
         texture.upload();
 
-        // Update TextureView to include newly loaded mip.
-        // Set diffuseMap directly — _updateMap natively binds it to bind group.
-        const customMaterial = (this as any)._customMaterial;
-        if (customMaterial && typeof (texture as any).getView === 'function') {
-          const mipCount = maxAvailableLod - minAvailableLod + 1;
-          const view = (texture as any).getView(minAvailableLod, mipCount);
-          customMaterial.diffuseMap = view as any;
-          this.log(this.LOG_VERBOSE,
-            `[KTX2] WebGPU: uploaded level ${level} TextureView ` +
-            `[${minAvailableLod}..${maxAvailableLod}] ${result.width}x${result.height} ` +
-            `(${(result.data.byteLength / 1024).toFixed(2)} KB)`
-          );
-        } else {
-          this.log(this.LOG_VERBOSE,
-            `[KTX2] WebGPU: uploaded level ${level} ${result.width}x${result.height} ` +
-            `(${(result.data.byteLength / 1024).toFixed(2)} KB)`
-          );
-        }
+        // DIAGNOSTIC: skip TextureView, just log upload
+        this.log(this.LOG_VERBOSE,
+          `[KTX2] WebGPU DIAG: uploaded level ${level} (no TextureView) ${result.width}x${result.height} ` +
+          `(${(result.data.byteLength / 1024).toFixed(2)} KB)`
+        );
         return;
       }
 
@@ -2404,18 +2339,9 @@ fn getAlbedo() {
     const device = this.app.graphicsDevice;
 
     if (device.isWebGPU && typeof (texture as any).getView === 'function') {
-      // WebGPU: TextureView restricts visible mips.
-      // Strategy: compile shader with full texture, then swap diffuseMap to TextureView.
-      // _updateMap natively binds this.diffuseMap → bind group receives TextureView → correct GPUTextureView.
-      const mipCount = maxLod - minLod + 1;
-      const initialView = (texture as any).getView(minLod, mipCount);
-
-      customMaterial.update(); // compiles shader with diffuseMap = full texture
-
-      // Swap to TextureView AFTER update(). _updateMap will use it natively each frame.
-      customMaterial.diffuseMap = initialView as any;
-
-      this.log(this.LOG_VERBOSE, `[KTX2] WebGPU: TextureView baseMip=${minLod} count=${mipCount}`);
+      // DIAGNOSTIC: skip TextureView, use full texture. Test sharpness.
+      customMaterial.update();
+      this.log(this.LOG_VERBOSE, `[KTX2] WebGPU DIAG: NO TextureView, full texture as diffuseMap`);
     } else {
       // WebGL: custom GLSL diffusePS chunk does LOD clamping via uniforms.
       // gl.texParameteri(TEXTURE_BASE_LEVEL/MAX_LEVEL) set in uploadMipLevel.
