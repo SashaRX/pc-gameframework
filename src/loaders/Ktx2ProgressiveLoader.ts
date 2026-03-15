@@ -86,6 +86,7 @@ export class Ktx2ProgressiveLoader {
   private activeTexture: pc.Texture | null = null;
   private minLoadedLod: number = Infinity;
   private maxLoadedLod: number = -Infinity;
+  private _textureIsSrgb = false;
 
   constructor(app: pc.Application, config: Ktx2LoaderConfig) {
     this.app = app;
@@ -721,7 +722,7 @@ fn getAlbedo() {
 
       // Get WebGL internal format for the selected transcode format
       const webglInternalFormat = transcodeConfig.isCompressed && this.gpuFormatDetector
-        ? this.gpuFormatDetector.getInternalFormat(this.getTextureFormatFromTranscodeFormat(transcodeConfig.format))
+        ? this.gpuFormatDetector.getInternalFormat(this.getTextureFormatFromTranscodeFormat(transcodeConfig.format), this._textureIsSrgb)
         : 0; // 0 for RGBA (will use default in uploadMipLevel)
 
       // Upload to GPU with progressive LOD update
@@ -888,7 +889,7 @@ fn getAlbedo() {
             minAvailableLod, maxAvailableLod,
             transcodeConfig.isCompressed,
             transcodeConfig.isCompressed && this.gpuFormatDetector
-              ? this.gpuFormatDetector.getInternalFormat(this.getTextureFormatFromTranscodeFormat(transcodeConfig.format))
+              ? this.gpuFormatDetector.getInternalFormat(this.getTextureFormatFromTranscodeFormat(transcodeConfig.format), this._textureIsSrgb)
               : 0
           );
           this.log(this.LOG_VERBOSE, `[KTX2] Small mip ${sm}: ${smResult.width}x${smResult.height}`);
@@ -1029,7 +1030,7 @@ fn getAlbedo() {
 
         // Get WebGL internal format for the selected transcode format
         const webglInternalFormat = transcodeConfig.isCompressed && this.gpuFormatDetector
-          ? this.gpuFormatDetector.getInternalFormat(this.getTextureFormatFromTranscodeFormat(transcodeConfig.format))
+          ? this.gpuFormatDetector.getInternalFormat(this.getTextureFormatFromTranscodeFormat(transcodeConfig.format), this._textureIsSrgb)
           : 0; // 0 for RGBA (will use default in uploadMipLevel)
 
         // Upload to GPU with correct LOD range
@@ -2086,6 +2087,7 @@ fn getAlbedo() {
     // In PlayCanvas 2.x, color textures (diffuse, albedo, etc) should use sRGB formats
     // Linear formats are used for data textures (normal maps, roughness, etc)
     const useSrgb = this.config.isSrgb || probe.colorSpace?.isSrgb;
+    this._textureIsSrgb = !!useSrgb;
 
     const device = this.app.graphicsDevice;
 
