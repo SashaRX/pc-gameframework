@@ -2419,28 +2419,30 @@ fn getAlbedo() {
 
     // Clone material to avoid modifying the original
     const customMaterial = originalMaterial.clone();
+    // Set diffuseMap so StandardMaterial compiles shader with STD_DIFFUSE_TEXTURE
     customMaterial.diffuseMap = texture;
 
-    // Set initial LOD range uniforms matching actually loaded levels
+    // Set initial LOD range uniforms
     customMaterial.setParameter('material_minAvailableLod', minLod);
     customMaterial.setParameter('material_maxAvailableLod', maxLod);
 
-    // WebGPU: bind a TextureView restricted to loaded mips so GPU doesn't sample empty levels.
+    // update() compiles shader AND binds texture_diffuseMap from diffuseMap property
+    customMaterial.update();
+
+    // WebGPU: AFTER update(), override texture_diffuseMap with a TextureView
+    // restricted to loaded mips. This must come after update() because update()
+    // calls setParameter('texture_diffuseMap', this.diffuseMap) internally.
     // On WebGL this is handled by gl.texParameteri(TEXTURE_BASE_LEVEL/MAX_LEVEL).
-    // IMPORTANT: inside a TextureView, mip indices are 0-based (mip 0 of view = real mip minLod).
-    // So uniforms must be relative to the view, not absolute.
     const device = this.app.graphicsDevice;
     if (device.isWebGPU && typeof (texture as any).getView === 'function') {
       const mipCount = maxLod - minLod + 1;
       const view = (texture as any).getView(minLod, mipCount);
       customMaterial.setParameter('texture_diffuseMap', view);
-      // Uniforms are view-relative: 0 = best loaded, mipCount-1 = worst loaded
+      // Uniforms are view-relative: mip 0 of view = real mip minLod
       customMaterial.setParameter('material_minAvailableLod', 0);
       customMaterial.setParameter('material_maxAvailableLod', mipCount - 1);
       this.log(this.LOG_VERBOSE, `[KTX2] WebGPU: bound TextureView baseMip=${minLod} count=${mipCount}`);
     }
-
-    customMaterial.update();
 
     // Apply custom material to mesh instance
     meshInstance.material = customMaterial;
@@ -2449,7 +2451,10 @@ fn getAlbedo() {
     (this as any)._customMaterial = customMaterial;
     (this as any)._activeTexture = texture;
 
-    this.log(this.LOG_INFO, `[KTX2] Texture applied to material with LOD uniforms [${minLod}, ${maxLod}]`);
+    this.log(this.LOG_INFO,
+      `[KTX2] Texture applied to material` +
+      (device.isWebGPU ? ` (WebGPU TextureView baseMip=${minLod})` : ` (WebGL LOD [${minLod}, ${maxLod}])`)
+    );
   }
 
   /**
