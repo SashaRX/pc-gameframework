@@ -295,9 +295,11 @@ void getAlbedo() {
       this.log(this.LOG_INFO, '[KTX2] GLSL shader chunk registered');
     }
 
-    // DIAGNOSTIC: skip WGSL chunk — pure standard PlayCanvas diffusePS
+    // WebGPU: no custom WGSL chunk needed.
+    // All mips filled (real + placeholders) → standard textureSampleBias + aniso=8 works.
+    // TextureView NOT used — bind group issues avoided.
     if (device.isWebGPU) {
-      this.log(this.LOG_INFO, '[KTX2] WebGPU DIAG: standard diffusePS, no TextureView, no custom chunk');
+      this.log(this.LOG_INFO, '[KTX2] WebGPU: standard diffusePS + filled mips + aniso=8');
     }
   }
 
@@ -2163,21 +2165,46 @@ void getAlbedo() {
           return;
         }
 
-        // Write data into the slot — engine will pick it up on next upload()
+        // Write real data into the slot
         levels[level] = result.data;
 
-        // Mark texture dirty so upload() actually processes the new data.
-        // Without this, upload() checks _needsUpload and skips if false.
-        (texture as any)._needsUpload = true;
+        // Fill ALL lower-quality mips (level+1 .. maxLevel) with placeholder data
+        // so GPU never hits empty mip slots. Use repeating first block from loaded data.
+        // For BC7: 1 block = 16 bytes = 4x4 pixels.
+        const blockSize = 16; // BC7 block size
+        const firstBlock = result.data.slice(0, blockSize);
+        const baseW = texture.width;
+        const baseH = texture.height;
 
-        // Push to GPU via PlayCanvas abstraction (calls wgpu.queue.writeTexture)
-        // upload() only sends non-null slots so partial-level state is safe.
+        for (let m = level + 1; m < levels.length; m++) {
+          if (levels[m] !== null) continue; // already has real data
+          const mipW = Math.max(1, baseW >> m);
+          const mipH = Math.max(1, baseH >> m);
+          const blocksX = Math.max(1, Math.ceil(mipW / 4));
+          const blocksY = Math.max(1, Math.ceil(mipH / 4));
+          const mipSize = blocksX * blocksY * blockSize;
+          const placeholder = new Uint8Array(mipSize);
+          // Fill with repeating first block (uniform color)
+          for (let offset = 0; offset < mipSize; offset += blockSize) {
+            placeholder.set(firstBlock, offset);
+          }
+          levels[m] = placeholder;
+        }
+
+        // Mark texture dirty and upload all non-null levels
+        (texture as any)._needsUpload = true;
         texture.upload();
 
-        // DIAGNOSTIC: skip TextureView, just log upload
+        // Update LOD uniforms for custom material (WebGL path uses these too)
+        const customMaterial = (this as any)._customMaterial;
+        if (customMaterial) {
+          customMaterial.setParameter('material_minAvailableLod', minAvailableLod);
+          customMaterial.setParameter('material_maxAvailableLod', maxAvailableLod);
+        }
+
         this.log(this.LOG_VERBOSE,
-          `[KTX2] WebGPU DIAG: uploaded level ${level} (no TextureView) ${result.width}x${result.height} ` +
-          `(${(result.data.byteLength / 1024).toFixed(2)} KB)`
+          `[KTX2] WebGPU: uploaded level ${level} + filled mips [${level + 1}..${levels.length - 1}] ` +
+          `${result.width}x${result.height} (${(result.data.byteLength / 1024).toFixed(2)} KB)`
         );
         return;
       }
@@ -2338,10 +2365,11 @@ void getAlbedo() {
 
     const device = this.app.graphicsDevice;
 
-    if (device.isWebGPU && typeof (texture as any).getView === 'function') {
-      // DIAGNOSTIC: skip TextureView, use full texture. Test sharpness.
+    if (device.isWebGPU) {
+      // WebGPU: all mips filled (real data + placeholders), no TextureView needed.
+      // Standard diffusePS handles mipmapping natively.
       customMaterial.update();
-      this.log(this.LOG_VERBOSE, `[KTX2] WebGPU DIAG: NO TextureView, full texture as diffuseMap`);
+      this.log(this.LOG_VERBOSE, `[KTX2] WebGPU: full texture, mips filled from level ${minLod}`);
     } else {
       // WebGL: custom GLSL diffusePS chunk does LOD clamping via uniforms.
       // gl.texParameteri(TEXTURE_BASE_LEVEL/MAX_LEVEL) set in uploadMipLevel.
