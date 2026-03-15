@@ -2369,13 +2369,21 @@ void getAlbedo() {
 
       // Patch _updateMap to intercept diffuse texture binding
       const origUpdateMap = customMaterial._updateMap.bind(customMaterial);
+      let _diagFrame = 0;
       (customMaterial as any)._updateMap = function (p: string) {
         if (p === 'diffuse') {
           // Bind our TextureView instead of full texture
-          this._setParameter('texture_diffuseMap', this._ktxView);
+          const v = this._ktxView;
+          this._setParameter('texture_diffuseMap', v);
           const tname = 'diffuseMapTransform';
           const uniform = this.getUniform(tname);
           if (uniform) this._setParameters(uniform);
+          // Diagnostic: log every 180 frames
+          if (++_diagFrame % 180 === 1) {
+            console.log('[KTX2:DIAG] _updateMap diffuse →', 
+              v ? `TextureView(baseMip=${v.baseMipLevel}, count=${v.mipLevelCount})` : 'NULL',
+              'param:', this.parameters['texture_diffuseMap']?.data?.constructor?.name);
+          }
           return;
         }
         origUpdateMap(p);
