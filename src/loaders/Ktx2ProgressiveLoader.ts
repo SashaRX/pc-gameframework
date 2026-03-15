@@ -2193,7 +2193,7 @@ void getAlbedo() {
         if (customMaterial && typeof (texture as any).getView === 'function') {
           const mipCount = maxAvailableLod - minAvailableLod + 1;
           const view = (texture as any).getView(minAvailableLod, mipCount);
-          customMaterial.setParameter('texture_diffuseMap', view);
+          customMaterial.diffuseMap = view as any;
           this.log(this.LOG_VERBOSE,
             `[KTX2] WebGPU: uploaded level ${level} TextureView ` +
             `[${minAvailableLod}..${maxAvailableLod}] ${result.width}x${result.height} ` +
@@ -2365,12 +2365,14 @@ void getAlbedo() {
     const device = this.app.graphicsDevice;
 
     if (device.isWebGPU && typeof (texture as any).getView === 'function') {
-      // WebGPU: TextureView restricts visible mips at GPU level.
-      // Standard textureSample inside the view works correctly — no custom shader needed.
-      customMaterial.update();
+      // WebGPU: set diffuseMap to a TextureView restricted to loaded mips.
+      // _updateMap() calls setParameter('texture_diffuseMap', this.diffuseMap) every frame,
+      // so the view must BE the diffuseMap — not set separately via setParameter.
+      // PlayCanvas bind group handles TextureView instances natively (webgpu-bind-group.js).
       const mipCount = maxLod - minLod + 1;
       const view = (texture as any).getView(minLod, mipCount);
-      customMaterial.setParameter('texture_diffuseMap', view);
+      customMaterial.diffuseMap = view as any;
+      customMaterial.update();
       this.log(this.LOG_VERBOSE, `[KTX2] WebGPU: TextureView baseMip=${minLod} count=${mipCount}`);
     } else {
       // WebGL: custom GLSL diffusePS chunk does LOD clamping via uniforms.
