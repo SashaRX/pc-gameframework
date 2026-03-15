@@ -122,13 +122,18 @@ export class GpuFormatDetector {
     return {
       // S3TC (BC1-BC3): extCompressedTextureS3TC on both backends
       s3tc:      !!device.extCompressedTextureS3TC,
-      s3tc_srgb: !!device.extCompressedTextureS3TC_SRGB,
+      // S3TC sRGB:
+      //   WebGL  → extCompressedTextureS3TC_SRGB (separate extension)
+      //   WebGPU → sRGB variants always available if BC is supported (bc1-rgba-unorm-srgb etc.)
+      s3tc_srgb: isWebGpu
+        ? !!device.extCompressedTextureS3TC
+        : !!device.extCompressedTextureS3TC_SRGB,
 
       // BC7:
       //   WebGL  → EXT_texture_compression_bptc (extTextureCompressionBPTC)
-      //   WebGPU → texture-format-tier1 (supportsTextureFormatTier1, includes tier2)
+      //   WebGPU → texture-compression-bc (extCompressedTextureS3TC) includes ALL BC formats (BC1-BC7)
       bptc: isWebGpu
-        ? (!!device.supportsTextureFormatTier1 || !!device.supportsTextureFormatTier2)
+        ? !!device.extCompressedTextureS3TC
         : !!device.extTextureCompressionBPTC,
 
       // BC4/BC5:
