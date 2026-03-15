@@ -296,12 +296,60 @@ void getAlbedo() {
     }
 
     // ----------------------------------------------------------------
-    // WGSL (WebGPU): DIAGNOSTIC — no custom chunk.
-    // Testing standard PlayCanvas diffusePS + TextureView + aniso=8
-    // If sharp → shader was the problem. If blurry → TextureView/upload problem.
+    // WGSL (WebGPU) — minor-axis LOD via textureSampleGrad.
+    // TextureView restricts max mip at GPU level — NO upper LOD clamp in shader.
+    // Standard diffusePS uses textureSampleBias (major-axis) → over-blur at angles.
+    // This chunk uses minor-axis derivatives → sharp, matching WebGL quality.
     // ----------------------------------------------------------------
     if (device.isWebGPU) {
-      this.log(this.LOG_INFO, '[KTX2] WebGPU DIAG: standard diffusePS + TextureView + aniso=8');
+      try {
+        const wgslChunks = (pc as any).ShaderChunks.get(device, 'wgsl');
+        wgslChunks.set('diffusePS', `
+uniform material_diffuse: vec3f;
+
+fn getAlbedo() {
+    dAlbedo = vec3f(1.0);
+    #ifdef STD_DIFFUSE_TEXTURE
+        var uv: vec2f = {STD_DIFFUSE_TEXTURE_UV};
+
+        let dudx: vec2f = dpdx(uv);
+        let dudy: vec2f = dpdy(uv);
+
+        // Texture size at mip 0 of the view (= best loaded mip)
+        let texSize: vec2f = vec2f(textureDimensions({STD_DIFFUSE_TEXTURE_NAME}, 0));
+
+        // Derivatives in texel space
+        let duvdx: vec2f = dudx * texSize;
+        let duvdy: vec2f = dudy * texSize;
+
+        // Minor axis for LOD — prevents over-blur at oblique angles
+        let minorAxis2: f32 = min(dot(duvdx, duvdx), dot(duvdy, duvdy));
+        let autoLod: f32 = 0.5 * log2(max(minorAxis2, 1e-8));
+
+        // NO upper clamp — TextureView restricts max mip at GPU level.
+        // Only floor to 0 (can't go sharper than mip 0).
+        let targetLod: f32 = max(autoLod, 0.0);
+        let scale: f32 = exp2(targetLod - autoLod);
+
+        dAlbedo = textureSampleGrad(
+            {STD_DIFFUSE_TEXTURE_NAME},
+            {STD_DIFFUSE_TEXTURE_NAME}Sampler,
+            uv, dudx * scale, dudy * scale).rgb;
+    #endif
+
+    #ifdef STD_DIFFUSE_CONSTANT
+        dAlbedo = dAlbedo * uniform.material_diffuse.rgb;
+    #endif
+
+    #ifdef STD_DIFFUSE_VERTEX
+        dAlbedo = dAlbedo * saturate3(vVertexColor.{STD_DIFFUSE_VERTEX_CHANNEL});
+    #endif
+}
+`);
+        this.log(this.LOG_INFO, '[KTX2] WGSL shader chunk registered');
+      } catch (e) {
+        this.logWarn('[KTX2] Failed to register WGSL shader chunk:', e);
+      }
     }
   }
 
