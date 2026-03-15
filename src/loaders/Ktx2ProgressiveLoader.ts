@@ -319,9 +319,10 @@ fn getAlbedo() {
         let dudx: vec2f = dpdx(uv);
         let dudy: vec2f = dpdy(uv);
 
-        // Full texture size at mip 0 (no TextureView — always 4096 for 4K texture)
-        let baseLod: u32 = u32(uniform.material_minAvailableLod);
-        let texSize: vec2f = vec2f(textureDimensions({STD_DIFFUSE_TEXTURE_NAME}, baseLod));
+        // ALWAYS use mip 0 for texture size — full resolution (e.g. 4096).
+        // Using minAvailableLod (e.g. 4 → 256px) gives wrong LOD calculation
+        // because autoLod is relative to full texture size, not loaded mip.
+        let texSize: vec2f = vec2f(textureDimensions({STD_DIFFUSE_TEXTURE_NAME}, 0));
 
         let duvdx: vec2f = dudx * texSize;
         let duvdy: vec2f = dudy * texSize;
