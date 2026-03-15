@@ -225,16 +225,8 @@ export class Ktx2ProgressiveLoader {
       return { format: 0, isCompressed: true }; // ETC1_RGB
     }
 
-    // Legacy iOS - PVRTC
-    if (capabilities.pvrtc) {
-      if (hasAlpha) {
-        this.log(this.LOG_VERBOSE, '[KTX2] Using PVRTC1_4_RGBA format');
-        return { format: 9, isCompressed: true }; // PVRTC1_4_RGBA
-      } else {
-        this.log(this.LOG_VERBOSE, '[KTX2] Using PVRTC1_4_RGB format');
-        return { format: 8, isCompressed: true }; // PVRTC1_4_RGB
-      }
-    }
+    // PVRTC removed — stripped from libktx build, no modern device needs it.
+    // Any PVRTC-only device (pre-2015 iOS) can't run WebGL2/WebGPU anyway.
 
     // Fallback to uncompressed RGBA
     this.log(this.LOG_INFO, '[KTX2] No compressed formats supported, using RGBA32');
