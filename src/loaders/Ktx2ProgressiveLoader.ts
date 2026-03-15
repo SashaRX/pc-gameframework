@@ -173,7 +173,7 @@ export class Ktx2ProgressiveLoader {
    * Select best transcode format based on GPU capabilities
    * Maps GpuFormatDetector.TextureFormat to KtxTranscodeFormat
    */
-  private selectTranscodeFormat(hasAlpha: boolean): { format: number; isCompressed: boolean } {
+  private selectTranscodeFormat(hasAlpha: boolean, isEtc1s = false): { format: number; isCompressed: boolean } {
     if (!this.gpuFormatDetector) {
       // Fallback to RGBA if detector not initialized
       return { format: 13, isCompressed: false }; // RGBA32
@@ -182,6 +182,7 @@ export class Ktx2ProgressiveLoader {
     const capabilities = this.gpuFormatDetector.getCapabilities();
 
     // Priority order: ASTC > BC7 > ETC2 > BC3 > ETC1 > PVRTC > RGBA
+    // Exception: ETC1S source → skip BC7 (source too low quality, BC7 wastes 2x VRAM)
 
     // Modern mobile - ASTC (best quality/compression ratio)
     if (capabilities.astc) {
@@ -189,9 +190,10 @@ export class Ktx2ProgressiveLoader {
       return { format: 10, isCompressed: true }; // ASTC_4x4_RGBA
     }
 
-    // Modern desktop - BC7 (best quality)
-    if (capabilities.bptc) {
-      this.log(this.LOG_VERBOSE, '[KTX2] Using BC7_RGBA format');
+    // Modern desktop - BC7 (best quality) — only for UASTC source
+    // ETC1S source is too low quality for BC7 to add value over BC1/BC3
+    if (capabilities.bptc && !isEtc1s) {
+      this.log(this.LOG_VERBOSE, '[KTX2] Using BC7_RGBA format (UASTC source)');
       return { format: 6, isCompressed: true }; // BC7_RGBA
     }
 
@@ -611,8 +613,11 @@ fn getAlbedo() {
     }
 
     // 4. Select transcode format based on GPU capabilities (BEFORE creating texture)
-    const transcodeConfig = this.selectTranscodeFormat(probe.colorSpace.hasAlpha);
-    console.log(`[KTX2] Selected transcode format: ${transcodeConfig.format} (compressed=${transcodeConfig.isCompressed})`);
+    const isEtc1s = probe.supercompressionScheme === 1;
+    const transcodeConfig = this.selectTranscodeFormat(probe.colorSpace.hasAlpha, isEtc1s);
+    this.log(this.LOG_INFO,
+      `[KTX2] Selected transcode format: ${transcodeConfig.format} ` +
+      `(compressed=${transcodeConfig.isCompressed}, source=${isEtc1s ? 'ETC1S' : 'UASTC'})`);
 
     // 5. Create texture with correct format
     const texture = this.createTexture(
@@ -997,8 +1002,8 @@ fn getAlbedo() {
       if (!lvl || lvl.byteLength === 0) continue;
 
       try {
-        // Select transcode format based on texture alpha channel
-        const transcodeConfig = this.selectTranscodeFormat(probe.colorSpace.hasAlpha);
+        const isEtc1s = probe.supercompressionScheme === 1;
+        const transcodeConfig = this.selectTranscodeFormat(probe.colorSpace.hasAlpha, isEtc1s);
 
         // Check cache first
         let result: Ktx2TranscodeResult | null = null;
@@ -1380,6 +1385,7 @@ fn getAlbedo() {
       kvdLen,
       sgdOff,
       sgdLen,
+      supercompressionScheme,
       width: pixelWidth,
       height: pixelHeight,
       colorSpace,
