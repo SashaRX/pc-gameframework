@@ -880,12 +880,13 @@ fn getAlbedo() {
         }
 
         if (smResult) {
-          // DON'T update maxAvailableLod — small mips are GPU slot fillers,
-          // shader LOD clamp should NOT sample below startLevel.
-          // Hardware trilinear within [minAvailableLod, startLevel] is correct.
+          // Small mips have REAL transcoded data — update LOD range
+          if (sm > maxAvailableLod) maxAvailableLod = sm;
+          this.maxLoadedLod = maxAvailableLod;
+
           this.uploadMipLevel(
             texture, sm, smResult,
-            minAvailableLod, startLevel,  // clamp to startLevel, not sm
+            minAvailableLod, maxAvailableLod,
             transcodeConfig.isCompressed,
             transcodeConfig.isCompressed && this.gpuFormatDetector
               ? this.gpuFormatDetector.getInternalFormat(this.getTextureFormatFromTranscodeFormat(transcodeConfig.format), this._textureIsSrgb)
@@ -893,6 +894,13 @@ fn getAlbedo() {
           );
           this.log(this.LOG_VERBOSE, `[KTX2] Small mip ${sm}: ${smResult.width}x${smResult.height}`);
         }
+      }
+
+      // Update material uniforms to include all loaded small mips
+      const customMaterial = (this as any)._customMaterial;
+      if (customMaterial) {
+        customMaterial.setParameter('material_maxAvailableLod', maxAvailableLod);
+        this.log(this.LOG_VERBOSE, `[KTX2] Small mips loaded, LOD range: [${minAvailableLod}, ${maxAvailableLod}]`);
       }
     }
     // All subsequent levels improve the quality progressively
