@@ -755,7 +755,7 @@ fn getAlbedo() {
       // Apply texture to entity after first level is loaded
       // This makes the texture visible immediately with lowest quality
       if (i === startLevel) {
-        this.applyTextureToEntity(entity, texture, probe.levelCount);
+        this.applyTextureToEntity(entity, texture, minAvailableLod, maxAvailableLod);
         this.log(this.LOG_INFO, '[KTX2] Texture applied to entity with initial quality');
       }
 
@@ -2396,7 +2396,7 @@ fn getAlbedo() {
     }
   }
 
-  private applyTextureToEntity(entity: pc.Entity, texture: pc.Texture, totalLevels: number): void {
+  private applyTextureToEntity(entity: pc.Entity, texture: pc.Texture, minLod: number, maxLod: number): void {
     // Support both model and render components
     const comp = entity.model || (entity as any).render;
     if (!comp) {
@@ -2420,10 +2420,7 @@ fn getAlbedo() {
     const customMaterial = originalMaterial.clone();
     customMaterial.diffuseMap = texture;
 
-    // Set initial LOD range uniforms (will be updated as levels load)
-    const minLod = totalLevels - 1; // Start with lowest quality
-    const maxLod = totalLevels - 1;
-
+    // Set initial LOD range uniforms matching actually loaded levels
     customMaterial.setParameter('material_minAvailableLod', minLod);
     customMaterial.setParameter('material_maxAvailableLod', maxLod);
     customMaterial.update();
