@@ -2183,6 +2183,10 @@ void getAlbedo() {
         // Write data into the slot — engine will pick it up on next upload()
         levels[level] = result.data;
 
+        // Mark texture dirty so upload() actually processes the new data.
+        // Without this, upload() checks _needsUpload and skips if false.
+        (texture as any)._needsUpload = true;
+
         // Push to GPU via PlayCanvas abstraction (calls wgpu.queue.writeTexture)
         // upload() only sends non-null slots so partial-level state is safe.
         texture.upload();
