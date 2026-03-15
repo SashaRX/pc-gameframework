@@ -335,6 +335,8 @@ fn getAlbedo() {
             {STD_DIFFUSE_TEXTURE_NAME},
             {STD_DIFFUSE_TEXTURE_NAME}Sampler,
             uv, dudx * scale, dudy * scale).rgb;
+        // DIAGNOSTIC: red tint to confirm WGSL chunk is active
+        dAlbedo = dAlbedo * vec3f(1.0, 0.7, 0.7);
     #endif
 
     #ifdef STD_DIFFUSE_CONSTANT
