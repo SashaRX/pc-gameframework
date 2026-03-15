@@ -110,6 +110,7 @@ export interface Ktx2ProbeResult {
   kvdLen: number;
   sgdOff: number;
   sgdLen: number;
+  supercompressionScheme: number;
   width: number;
   height: number;
   colorSpace: Ktx2ColorSpace;
