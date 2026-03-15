@@ -2047,6 +2047,7 @@ fn getAlbedo() {
       magFilter: pc.FILTER_LINEAR,
       addressU: pc.ADDRESS_REPEAT,
       addressV: pc.ADDRESS_REPEAT,
+      anisotropy: this.config.enableAniso ? 8 : 1,
     });
 
     texture.name = `ktx2_${probe.url.split('/').pop()}`;
