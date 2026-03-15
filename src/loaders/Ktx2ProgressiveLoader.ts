@@ -315,11 +315,26 @@ fn getAlbedo() {
         let dudx: vec2f = dpdx(uv);
         let dudy: vec2f = dpdy(uv);
 
-        // DIAGNOSTIC: show textureDimensions as color
-        // Red channel = texSize.x / 4096 (should be 1.0 when all mips loaded)
-        // Green channel = autoLod / 13 (normalized LOD value)
+        // Texture size at mip 0 of the view (= best loaded mip)
         let texSize: vec2f = vec2f(textureDimensions({STD_DIFFUSE_TEXTURE_NAME}, 0));
-        dAlbedo = vec3f(texSize.x / 4096.0, 0.0, 0.0);
+
+        // Derivatives in texel space
+        let duvdx: vec2f = dudx * texSize;
+        let duvdy: vec2f = dudy * texSize;
+
+        // Minor axis for LOD — prevents over-blur at oblique angles
+        let minorAxis2: f32 = min(dot(duvdx, duvdx), dot(duvdy, duvdy));
+        let autoLod: f32 = 0.5 * log2(max(minorAxis2, 1e-8));
+
+        // NO upper clamp — TextureView restricts max mip at GPU level.
+        // Only floor to 0 (can't go sharper than mip 0).
+        let targetLod: f32 = max(autoLod, 0.0);
+        let scale: f32 = exp2(targetLod - autoLod);
+
+        dAlbedo = textureSampleGrad(
+            {STD_DIFFUSE_TEXTURE_NAME},
+            {STD_DIFFUSE_TEXTURE_NAME}Sampler,
+            uv, dudx * scale, dudy * scale).rgb;
     #endif
 
     #ifdef STD_DIFFUSE_CONSTANT
@@ -2211,14 +2226,13 @@ fn getAlbedo() {
         // upload() only sends non-null slots so partial-level state is safe.
         texture.upload();
 
-        // Update TextureView + LOD uniforms (view-relative) for WGSL chunk.
+        // Update TextureView to include newly loaded mip.
+        // Set diffuseMap directly — _updateMap natively binds it to bind group.
         const customMaterial = (this as any)._customMaterial;
         if (customMaterial && typeof (texture as any).getView === 'function') {
           const mipCount = maxAvailableLod - minAvailableLod + 1;
           const view = (texture as any).getView(minAvailableLod, mipCount);
-          customMaterial._ktxView = view;
-          customMaterial.setParameter('material_minAvailableLod', 0);
-          customMaterial.setParameter('material_maxAvailableLod', mipCount - 1);
+          customMaterial.diffuseMap = view as any;
           this.log(this.LOG_VERBOSE,
             `[KTX2] WebGPU: uploaded level ${level} TextureView ` +
             `[${minAvailableLod}..${maxAvailableLod}] ${result.width}x${result.height} ` +
@@ -2390,39 +2404,17 @@ fn getAlbedo() {
     const device = this.app.graphicsDevice;
 
     if (device.isWebGPU && typeof (texture as any).getView === 'function') {
-      // WebGPU: TextureView restricts visible mips + WGSL chunk does LOD clamping.
-      // LOD uniforms are view-relative: 0 = best loaded mip, mipCount-1 = worst.
+      // WebGPU: TextureView restricts visible mips.
+      // Strategy: compile shader with full texture, then swap diffuseMap to TextureView.
+      // _updateMap natively binds this.diffuseMap → bind group receives TextureView → correct GPUTextureView.
       const mipCount = maxLod - minLod + 1;
-      let activeView = (texture as any).getView(minLod, mipCount);
-      (customMaterial as any)._ktxView = activeView;
+      const initialView = (texture as any).getView(minLod, mipCount);
 
-      // View-relative LOD uniforms for WGSL textureSampleGrad chunk
-      customMaterial.setParameter('material_minAvailableLod', 0);
-      customMaterial.setParameter('material_maxAvailableLod', mipCount - 1);
+      customMaterial.update(); // compiles shader with diffuseMap = full texture
 
-      // Patch _updateMap to intercept diffuse texture binding
-      const origUpdateMap = customMaterial._updateMap.bind(customMaterial);
-      let _diagFrame = 0;
-      (customMaterial as any)._updateMap = function (p: string) {
-        if (p === 'diffuse') {
-          // Bind our TextureView instead of full texture
-          const v = this._ktxView;
-          this._setParameter('texture_diffuseMap', v);
-          const tname = 'diffuseMapTransform';
-          const uniform = this.getUniform(tname);
-          if (uniform) this._setParameters(uniform);
-          // Diagnostic: log every 180 frames
-          if (++_diagFrame % 180 === 1) {
-            console.log('[KTX2:DIAG] _updateMap diffuse →', 
-              v ? `TextureView(baseMip=${v.baseMipLevel}, count=${v.mipLevelCount})` : 'NULL',
-              'param:', this.parameters['texture_diffuseMap']?.data?.constructor?.name);
-          }
-          return;
-        }
-        origUpdateMap(p);
-      };
+      // Swap to TextureView AFTER update(). _updateMap will use it natively each frame.
+      customMaterial.diffuseMap = initialView as any;
 
-      customMaterial.update();
       this.log(this.LOG_VERBOSE, `[KTX2] WebGPU: TextureView baseMip=${minLod} count=${mipCount}`);
     } else {
       // WebGL: custom GLSL diffusePS chunk does LOD clamping via uniforms.
