@@ -182,11 +182,11 @@ export class Ktx2ProgressiveLoader {
     const capabilities = this.gpuFormatDetector.getCapabilities();
 
     // Priority order: ASTC > BC7 > ETC2 > BC3 > ETC1 > PVRTC > RGBA
-    // Exception: ETC1S source → skip BC7 (source too low quality, BC7 wastes 2x VRAM)
+    // Exception: ETC1S source → skip ASTC/BC7 (source too low quality, 8bpp formats waste 2x VRAM)
 
-    // Modern mobile - ASTC (best quality/compression ratio)
-    if (capabilities.astc) {
-      this.log(this.LOG_VERBOSE, '[KTX2] Using ASTC_4x4_RGBA format');
+    // Modern mobile - ASTC (best quality/compression ratio) — only for UASTC source
+    if (capabilities.astc && !isEtc1s) {
+      this.log(this.LOG_VERBOSE, '[KTX2] Using ASTC_4x4_RGBA format (UASTC source)');
       return { format: 10, isCompressed: true }; // ASTC_4x4_RGBA
     }
 
