@@ -254,11 +254,25 @@ export class GpuFormatDetector {
    * Get WebGL internal format constant for a given TextureFormat.
    * Uses values cached at construction time — no getExtension() calls.
    * Returns 0 on WebGPU (not applicable; upload path uses PlayCanvas abstraction).
+   * @param isSrgb If true, return sRGB variant of the GL format (for hardware sRGB decode)
    */
-  getInternalFormat(format: TextureFormat): number {
+  getInternalFormat(format: TextureFormat, isSrgb = false): number {
     if (this._isWebGpu) return 0;
 
     const f = this.extFormats;
+
+    // sRGB variants (GL enums from BPTC/S3TC_SRGB extensions)
+    if (isSrgb) {
+      switch (format) {
+        case TextureFormat.BC1_RGB:    return 0x8C4C; // COMPRESSED_SRGB_S3TC_DXT1_EXT
+        case TextureFormat.BC1_RGBA:   return 0x8C4C; // COMPRESSED_SRGB_S3TC_DXT1_EXT
+        case TextureFormat.BC3_RGBA:   return 0x8C4F; // COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT
+        case TextureFormat.BC7_RGBA:   return 0x8E8D; // COMPRESSED_SRGB_ALPHA_BPTC_UNORM_EXT
+        // Other formats: fall through to non-sRGB
+        default: break;
+      }
+    }
+
     switch (format) {
       case TextureFormat.BC1_RGB:    return f.COMPRESSED_RGB_S3TC_DXT1_EXT   ?? 0;
       case TextureFormat.BC1_RGBA:   return f.COMPRESSED_RGBA_S3TC_DXT1_EXT  ?? 0;
