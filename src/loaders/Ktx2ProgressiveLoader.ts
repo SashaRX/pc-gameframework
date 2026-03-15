@@ -315,28 +315,11 @@ fn getAlbedo() {
         let dudx: vec2f = dpdx(uv);
         let dudy: vec2f = dpdy(uv);
 
-        // Texture size at mip 0 of the view (= best loaded mip)
+        // DIAGNOSTIC: show textureDimensions as color
+        // Red channel = texSize.x / 4096 (should be 1.0 when all mips loaded)
+        // Green channel = autoLod / 13 (normalized LOD value)
         let texSize: vec2f = vec2f(textureDimensions({STD_DIFFUSE_TEXTURE_NAME}, 0));
-
-        // Derivatives in texel space
-        let duvdx: vec2f = dudx * texSize;
-        let duvdy: vec2f = dudy * texSize;
-
-        // Minor axis for LOD — prevents over-blur at oblique angles
-        let minorAxis2: f32 = min(dot(duvdx, duvdx), dot(duvdy, duvdy));
-        let autoLod: f32 = 0.5 * log2(max(minorAxis2, 1e-8));
-
-        // NO upper clamp — TextureView restricts max mip at GPU level.
-        // Only floor to 0 (can't go sharper than mip 0).
-        let targetLod: f32 = max(autoLod, 0.0);
-        let scale: f32 = exp2(targetLod - autoLod);
-
-        dAlbedo = textureSampleGrad(
-            {STD_DIFFUSE_TEXTURE_NAME},
-            {STD_DIFFUSE_TEXTURE_NAME}Sampler,
-            uv, dudx * scale, dudy * scale).rgb;
-        // DIAGNOSTIC: GREEN tint to confirm WGSL chunk is active
-        dAlbedo = dAlbedo * vec3f(0.0, 1.0, 0.0);
+        dAlbedo = vec3f(texSize.x / 4096.0, 0.0, 0.0);
     #endif
 
     #ifdef STD_DIFFUSE_CONSTANT
