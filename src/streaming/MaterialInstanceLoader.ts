@@ -20,6 +20,7 @@ import {
   TextureRef,
   isPackedTextureKey,
 } from './MappingTypes';
+import { NwStats } from '../debug/NwStats';
 
 export interface MaterialInstanceLoaderConfig {
   debug?: boolean;
@@ -58,6 +59,7 @@ export class MaterialInstanceLoader {
    */
   registerMaster(name: string, material: pc.StandardMaterial): void {
     this.masterMaterials.set(name, material);
+    NwStats.onMasterRegistered(name);
     this.log(`Registered master: ${name}`);
   }
 
@@ -73,6 +75,7 @@ export class MaterialInstanceLoader {
       if (asset.resource) {
         const name = asset.name;
         this.masterMaterials.set(name, asset.resource as pc.StandardMaterial);
+        NwStats.onMasterRegistered(name);
         this.log(`Auto-registered master: ${name}`);
       }
     }
@@ -92,6 +95,7 @@ export class MaterialInstanceLoader {
         const asset = this.app.assets.get(assetId);
         if (asset?.resource) {
           this.masterMaterials.set(name, asset.resource as pc.StandardMaterial);
+          NwStats.onMasterRegistered(name);
           this.log(`Registered master from mapping: ${name} (ID: ${assetId})`);
         }
       }
@@ -127,6 +131,7 @@ export class MaterialInstanceLoader {
     }
 
     // Start loading
+    NwStats.onInstanceLoadStart();
     const promise = this.doLoad(id);
     this.loadingPromises.set(id, promise);
 
@@ -135,6 +140,7 @@ export class MaterialInstanceLoader {
       this.loadedInstances.set(id, result);
       return result;
     } finally {
+      NwStats.onInstanceLoadEnd();
       this.loadingPromises.delete(id);
     }
   }
@@ -204,6 +210,8 @@ export class MaterialInstanceLoader {
         textureRefs.set(slot, ref);
       }
     }
+
+    NwStats.onInstanceCreated(json.master);
 
     this.log(`Created instance: ${id}`, {
       master: json.master,
@@ -325,6 +333,7 @@ export class MaterialInstanceLoader {
     const instance = this.loadedInstances.get(id);
 
     if (instance) {
+      NwStats.onInstanceUnloaded(instance.masterName);
       instance.material.destroy();
       this.loadedInstances.delete(id);
       this.log(`Unloaded: ${id}`);

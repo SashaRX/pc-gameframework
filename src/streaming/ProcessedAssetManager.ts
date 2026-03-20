@@ -21,6 +21,7 @@ import { LodManager } from './LodManager';
 import { CacheManager } from './CacheManager';
 import { Ktx2ProgressiveLoader } from '../loaders/Ktx2ProgressiveLoader';
 import { LoadedMaterialInstance, isPackedTextureKey } from './MappingTypes';
+import { NwStats } from '../debug/NwStats';
 
 export interface ProcessedAssetManagerConfig {
   /** URL to mapping.json */
@@ -76,6 +77,9 @@ export class ProcessedAssetManager {
     this.registrar = new AssetRegistrar(app, { debug: this.config.debug });
     this.materialLoader = new MaterialInstanceLoader(app, { debug: this.config.debug });
     this.lodManager = new LodManager(app, { debug: this.config.debug });
+
+    // Init NwStats — mounts app.stats.nw and activates pc.Tracing if debug build
+    NwStats.init(app);
   }
 
   private log(...args: any[]): void {
@@ -132,6 +136,20 @@ export class ProcessedAssetManager {
   }
 
   // ============================================================================
+  // MiniStats
+  // ============================================================================
+
+  /**
+   * Create MiniStats overlay pre-configured with NW pipeline graphs.
+   * Requires pc.MiniStats (available in debug launch or extras bundle).
+   *
+   * @param startSizeIndex 0=small, 1=medium, 2=large
+   */
+  createMiniStats(startSizeIndex = 1): any {
+    return NwStats.createMiniStats(this.app, startSizeIndex);
+  }
+
+  // ============================================================================
   // Template Processing
   // ============================================================================
 
@@ -149,6 +167,9 @@ export class ProcessedAssetManager {
     for (const entity of entities) {
       await this.processEntity(entity);
     }
+
+    // Update LOD tracked count in stats
+    NwStats.setLodTracked(this.lodManager.getTrackedCount());
 
     this.log(`Template processed: ${templateInstance.name}`);
   }
@@ -271,13 +292,18 @@ export class ProcessedAssetManager {
 
     // Start loading
     this.activeTextureLoads++;
+    NwStats.onTextureLoadStart();
     const promise = this.doLoadTexture(url);
     this.loadingTextures.set(url, promise);
 
     try {
       const texture = await promise;
       this.loadedTextures.set(url, texture);
+      NwStats.onTextureLoadEnd(false);
       return texture;
+    } catch (e) {
+      NwStats.onTextureLoadEnd(true);
+      throw e;
     } finally {
       this.activeTextureLoads--;
       this.loadingTextures.delete(url);

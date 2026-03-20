@@ -78,3 +78,9 @@ import './scripts/StreamedModelScript';
 // Streaming - Asset streaming system (new)
 // ============================================================================
 export * from './streaming';
+
+// ============================================================================
+// Debug & Stats
+// ============================================================================
+export { NwStats } from './debug/NwStats';
+export type { NwStatsData, NwMaterialStats, NwTextureStats, NwLodStats } from './debug/NwStats';
