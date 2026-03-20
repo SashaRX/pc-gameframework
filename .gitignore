@@ -33,3 +33,5 @@ pcconfig.json
 
 # Build number (local per project, not committed)
 .buildnum
+# PlayCanvas sync config — содержит API ключ, не коммитить
+.pcconfig
