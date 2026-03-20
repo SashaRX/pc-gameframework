@@ -1,11 +1,7 @@
 name: Build & Push to PlayCanvas
 
 on:
-  # Ручной запуск из вкладки Actions — основной способ
   workflow_dispatch:
-
-  # Автоматически при пуше тега v*.*.*
-  # git tag v0.2.12 && git push origin v0.2.12
   push:
     tags:
       - 'v*.*.*'
@@ -28,12 +24,34 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Сборка: удаляет build/, запускает tsc + worker-inline + rename-to-mjs
+      # Генерируем .pcconfig для pcsync из GitHub Secrets.
+      # Файл не коммитится (.gitignore), создаётся только в CI окружении.
+      - name: Generate .pcconfig
+        env:
+          PC_API_KEY: ${{ secrets.PC_API_KEY }}
+          PC_PROJECT_ID: ${{ secrets.PC_PROJECT_ID }}
+          PC_BRANCH_ID: ${{ secrets.PC_BRANCH_ID }}
+        run: |
+          cat > .pcconfig << JSON
+          {
+            "PLAYCANVAS_USE_CWD_AS_TARGET": "1",
+            "PLAYCANVAS_API_KEY": "$PC_API_KEY",
+            "PLAYCANVAS_BRANCH_ID": "$PC_BRANCH_ID",
+            "PLAYCANVAS_PROJECT_ID": $PC_PROJECT_ID,
+            "PLAYCANVAS_BAD_FILE_REG": "^\\\\.|~$",
+            "PLAYCANVAS_BAD_FOLDER_REG": "^\\\\.|typings|node_modules",
+            "PLAYCANVAS_TARGET_SUBDIR": "build/esm",
+            "PLAYCANVAS_CONVERT_TO_POW2": 0
+          }
+          JSON
+
       - name: Build
         run: npm run build:clean
 
-      # Пуш в PlayCanvas Editor:
-      #   --skip-build — пропускаем повторную сборку внутри скрипта
-      #   PC_API_KEY и .pcconfig уже в репо, pcsync работает без доп. секретов
+      # --skip-build: сборка уже выполнена выше, не повторяем
       - name: Push to PlayCanvas Editor
+        env:
+          PC_API_KEY: ${{ secrets.PC_API_KEY }}
+          PC_PROJECT_ID: ${{ secrets.PC_PROJECT_ID }}
+          PC_BRANCH_ID: ${{ secrets.PC_BRANCH_ID }}
         run: node scripts/clean-and-push.js --skip-build
