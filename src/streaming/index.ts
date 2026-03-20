@@ -81,3 +81,7 @@ export { TextureLoader } from './loaders/TextureLoader';
 
 // Legacy types
 export * from './types';
+
+// Debug & stats
+export { NwStats } from '../debug/NwStats';
+export type { NwStatsData, NwMaterialStats, NwTextureStats, NwLodStats } from '../debug/NwStats';
