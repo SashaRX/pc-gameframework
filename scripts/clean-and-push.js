@@ -40,6 +40,9 @@ const FRAMEWORK_FOLDERS = [
 // Файлы фреймворка вне папок (если вдруг есть в корне)
 const FRAMEWORK_ROOT_FILES = [];
 
+
+// ─── flags ───────────────────────────────────────────────────────────────────
+const SKIP_BUILD = process.argv.includes('--skip-build');
 // ─── PlayCanvas REST API helpers ──────────────────────────────────────────────
 function pcRequest(method, urlPath, body = null) {
   return new Promise((resolve, reject) => {
@@ -268,8 +271,12 @@ async function main() {
   console.log('╚══════════════════════════════════════════╝\n');
 
   await fetchBuildCount();
-  cleanLocalBuild();
-  buildProject();
+  if (!SKIP_BUILD) {
+    cleanLocalBuild();
+    buildProject();
+  } else {
+    console.log('--skip-build: пропускаю сборку (используется уже готовый build/)\n');
+  }
   await cleanPlayCanvas();   // сначала чистим старое
   await pushAndTag();        // потом пушим новое с тегами
 
