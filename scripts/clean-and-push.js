@@ -23,9 +23,12 @@ const https = require('https');
 // ─── конфиг ──────────────────────────────────────────────────────────────────
 const BUILD_DIR    = 'build/esm';
 const TAG          = 'framework-managed';
-const PC_API_KEY   = 'nR52SL5LoTT327VWAPzRcsETR6yUixEC';
-const PROJECT_ID   = 1416468;
-const BRANCH_ID    = 'aa5b09b6-83d5-48e0-a7b3-fe1fb721c935';
+// Читаем из env (CI) с фоллбеком на локальные значения.
+// Локально значения берутся из .pcconfig (не коммитится).
+// В CI передаются через GitHub Secrets → env в workflow.
+const PC_API_KEY   = process.env.PC_API_KEY   || 'nR52SL5LoTT327VWAPzRcsETR6yUixEC';
+const PROJECT_ID   = Number(process.env.PC_PROJECT_ID) || 1416468;
+const BRANCH_ID    = process.env.PC_BRANCH_ID  || 'aa5b09b6-83d5-48e0-a7b3-fe1fb721c935';
 const PC_API_BASE  = 'https://playcanvas.com/api';
 
 // Папки которыми ВЛАДЕЕТ фреймворк — чистка работает только здесь
