@@ -1,0 +1,39 @@
+name: Build & Push to PlayCanvas
+
+on:
+  # Ручной запуск из вкладки Actions — основной способ
+  workflow_dispatch:
+
+  # Автоматически при пуше тега v*.*.*
+  # git tag v0.2.12 && git push origin v0.2.12
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Сборка: удаляет build/, запускает tsc + worker-inline + rename-to-mjs
+      - name: Build
+        run: npm run build:clean
+
+      # Пуш в PlayCanvas Editor:
+      #   --skip-build — пропускаем повторную сборку внутри скрипта
+      #   PC_API_KEY и .pcconfig уже в репо, pcsync работает без доп. секретов
+      - name: Push to PlayCanvas Editor
+        run: node scripts/clean-and-push.js --skip-build
