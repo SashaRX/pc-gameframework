@@ -3,7 +3,6 @@
  *
  * Attach to ANY entity in the scene to activate NwStats and __NW__ global.
  * Does NOT require mappingUrl or any other config.
- * Safe to keep in scene permanently — no runtime cost.
  *
  * After init, use in browser console:
  *   __NW__.stats         // live counters
@@ -12,15 +11,21 @@
  *   __NW__.tracing(pc.TRACEID_SHADER_ALLOC)  // enable pc.Tracing (debug build only)
  */
 
-import * as pc from 'playcanvas';
+import type * as pc from 'playcanvas';
+import * as pcRuntime from 'playcanvas';
 import { NwStats } from '../debug/NwStats';
 
-export class NwDebugScript extends pc.ScriptType {
+const Script = (pcRuntime as any).Script;
+
+export class NwDebugScript extends Script {
+  static readonly scriptName = 'nwDebug';
+
+  declare app: pc.Application;
+
   initialize(): void {
     NwStats.init(this.app);
-    console.log('[NwDebugScript] Ready. __NW__ is available in console.');
+    console.log('[NwDebugScript] Ready. Use __NW__ in console: __NW__.stats, __NW__.miniStats(), __NW__.app');
   }
 }
 
-NwDebugScript.scriptName = 'nwDebug';
-pc.registerScript(NwDebugScript, 'nwDebug');
+(pcRuntime as any).registerScript(NwDebugScript, 'nwDebug');
