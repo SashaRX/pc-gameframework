@@ -258,59 +258,42 @@ export class NwStats {
       zIndex:        '99999',
       background:    'rgba(10, 10, 14, 0.88)',
       color:         '#c8c8d0',
-      font:          '11px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace',
-      padding:       '7px 10px 8px',
-      borderRadius:  '5px',
-      minWidth:      '170px',
+      font:          '11px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+      padding:       '5px 8px',
+      borderRadius:  '4px',
       pointerEvents: 'none',
       whiteSpace:    'pre',
-      letterSpacing: '0.01em',
       borderLeft:    '2px solid #38a',
-      boxShadow:     '0 2px 8px rgba(0,0,0,0.5)',
+      boxShadow:     '0 2px 6px rgba(0,0,0,0.5)',
     });
     document.body.appendChild(root);
 
-    // Создаём строки: label-span + value-span для независимой раскраски
-    const rows: Array<{ label: string; key: string; color: string }> = [
-      { label: 'Masters  ', key: 'masters',   color: '#7af' },
-      { label: 'Instances', key: 'instances', color: '#af7' },
-      { label: 'Mat Load ', key: 'matLoad',   color: '#fa7' },
-      { label: 'Tex Done ', key: 'texDone',   color: '#af7' },
-      { label: 'Tex Load ', key: 'texLoad',   color: '#fa7' },
-      { label: 'LOD      ', key: 'lod',       color: '#7af' },
+    // [ label, dataKey, color ]
+    const rows: Array<[string, string, string]> = [
+      ['Mst', 'masters',   '#7af'],
+      ['Ins', 'instances', '#af7'],
+      ['ML',  'matLoad',   '#fa7'],
+      ['TL',  'texLoad',   '#fa7'],
+      ['TD',  'texDone',   '#af7'],
+      ['LOD', 'lod',       '#7af'],
     ];
 
-    // Header
-    const header = document.createElement('div');
-    header.textContent = 'NW Stats';
-    Object.assign(header.style, { color: '#88aacc', marginBottom: '4px', fontSize: '10px', letterSpacing: '0.05em' });
-    root.appendChild(header);
-
-    // Divider
-    const div0 = document.createElement('div');
-    div0.textContent = ''.padEnd(20, '-');
-    Object.assign(div0.style, { color: '#333', marginBottom: '2px' });
-    root.appendChild(div0);
-
-    // Rows
     const valueEls: Record<string, HTMLElement> = {};
-    for (const row of rows) {
+    for (const [label, key, color] of rows) {
       const line = document.createElement('div');
-      const labelEl = document.createElement('span');
-      labelEl.textContent = row.label + ' ';
-      labelEl.style.color = '#888';
-      const valEl = document.createElement('span');
-      valEl.style.color = row.color;
-      valEl.textContent = '0';
-      valueEls[row.key] = valEl;
-      line.appendChild(labelEl);
-      line.appendChild(valEl);
+      const lbl = document.createElement('span');
+      lbl.textContent = label.padEnd(4);
+      lbl.style.color = '#555';
+      const val = document.createElement('span');
+      val.style.color = color;
+      val.textContent = '0';
+      valueEls[key] = val;
+      line.appendChild(lbl);
+      line.appendChild(val);
       root.appendChild(line);
     }
 
-    // byMaster section
     const byMasterEl = document.createElement('div');
-    byMasterEl.style.marginTop = '3px';
     root.appendChild(byMasterEl);
 
     const update = () => {
@@ -321,27 +304,25 @@ export class NwStats {
       valueEls['masters'].textContent   = String(m.masters);
       valueEls['instances'].textContent = String(m.instances);
       valueEls['matLoad'].textContent   = String(m.loading);
-      valueEls['texDone'].textContent   = String(t.loaded);
       valueEls['texLoad'].textContent   = String(t.loading);
+      valueEls['texDone'].textContent   = String(t.loaded);
       valueEls['lod'].textContent       = String(l.tracked);
 
-      // Highlight non-zero loading
       valueEls['matLoad'].style.color = m.loading > 0 ? '#ffa' : '#fa7';
       valueEls['texLoad'].style.color = t.loading > 0 ? '#ffa' : '#fa7';
 
-      // byMaster breakdown
-      const entries = Object.entries(m.byMaster).filter(([, v]) => v > 0);
       byMasterEl.innerHTML = '';
+      const entries = Object.entries(m.byMaster).filter(([, v]) => v > 0);
       if (entries.length > 0) {
         const sep = document.createElement('div');
-        sep.textContent = ''.padEnd(20, '-');
+        sep.textContent = '----';
         sep.style.color = '#333';
         byMasterEl.appendChild(sep);
         for (const [k, v] of entries) {
           const row = document.createElement('div');
           const lbl = document.createElement('span');
-          lbl.style.color = '#666';
-          lbl.textContent = '  ' + k.slice(0, 12).padEnd(12) + ' ';
+          lbl.style.color = '#555';
+          lbl.textContent = k.slice(0, 8).padEnd(9);
           const val = document.createElement('span');
           val.style.color = '#af7';
           val.textContent = String(v);
