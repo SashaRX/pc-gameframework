@@ -1,18 +1,16 @@
 /**
  * NwStats - Runtime statistics for North Wind asset pipeline
  *
- * Writes counters into app.stats.nw so MiniStats can display them natively.
- * Also activates pc.Tracing channels when running under PlayCanvas debug build.
+ * Writes counters into app.stats so MiniStats can display them natively.
+ * MiniStats reads stats via flat string keys (e.g. "nwMatInst"),
+ * so we mount flat counters directly on app.stats alongside
+ * a nested app.stats.nw object for console convenience.
  *
  * Usage:
- *   // In ProcessedAssetManager.initialize():
- *   NwStats.init(app);
- *
- *   // Optionally mount MiniStats with NW graphs:
- *   NwStats.createMiniStats(app);
- *
- *   // From console at any time:
- *   app.stats.nw
+ *   NwStats.init(app);              // in NwDebugScript or ProcessedAssetManager
+ *   __NW__.stats                    // console: nested view
+ *   __NW__.miniStats()              // mount MiniStats overlay
+ *   app.stats.nwMatInst             // flat counter readable by MiniStats
  */
 
 import type * as pc from 'playcanvas';
@@ -22,25 +20,18 @@ import type * as pc from 'playcanvas';
 // ============================================================================
 
 export interface NwMaterialStats {
-  /** Number of registered master materials */
   masters: number;
-  /** Total created instances (cumulative) */
   instances: number;
-  /** Currently loading instance JSON requests in-flight */
   loading: number;
-  /** Instance count per master name */
   byMaster: Record<string, number>;
 }
 
 export interface NwTextureStats {
-  /** Fully loaded unique textures */
   loaded: number;
-  /** Currently loading */
   loading: number;
 }
 
 export interface NwLodStats {
-  /** Number of entities tracked by LodManager */
   tracked: number;
 }
 
@@ -72,19 +63,21 @@ export class NwStats {
 
   /**
    * Call once after app is created, before loading begins.
-   * Mounts data onto app.stats.nw and optionally activates pc.Tracing.
+   * Mounts flat counters on app.stats (for MiniStats) and
+   * a nested app.stats.nw object (for console convenience).
    */
   static init(app: pc.Application): void {
     NwStats.app = app;
     NwStats.data = NwStats.createEmpty();
 
-    // Mount into app.stats so MiniStats can read it by path 'nw.*'
+    // Nested object for console: app.stats.nw / __NW__.stats
     (app.stats as any).nw = NwStats.data;
 
-    // Expose globally for console access:
-    //   __NW__.stats       → live counters
-    //   __NW__.app         → pc.Application instance
-    //   __NW__.miniStats() → mount MiniStats overlay
+    // Flat counters for MiniStats (reads single-level keys from app.stats)
+    // Updated via syncFlat() on every counter change
+    NwStats.syncFlat(app);
+
+    // Expose globally for console access
     (globalThis as any).__NW__ = {
       stats:     NwStats.data,
       app,
@@ -107,79 +100,101 @@ export class NwStats {
   }
 
   /**
-   * Enable pc.Tracing channels if the debug build is available.
-   * In production build these are no-ops so calling them is safe.
+   * Sync nested data → flat keys on app.stats.
+   * MiniStats reads these as app.stats[key].
    */
+  private static syncFlat(app: pc.Application): void {
+    const s = app.stats as any;
+    s.nwMatMasters   = NwStats.data.materials.masters;
+    s.nwMatInst      = NwStats.data.materials.instances;
+    s.nwMatLoading   = NwStats.data.materials.loading;
+    s.nwTexLoaded    = NwStats.data.textures.loaded;
+    s.nwTexLoading   = NwStats.data.textures.loading;
+    s.nwLodTracked   = NwStats.data.lod.tracked;
+  }
+
+  private static sync(): void {
+    if (NwStats.app) NwStats.syncFlat(NwStats.app);
+  }
+
+  // ============================================================================
+  // Private — pc.Tracing
+  // ============================================================================
+
   private static tryEnablePcTracing(): void {
     const pc = (globalThis as any).pc;
     if (!pc?.Tracing) return;
 
-    // pc.Debug only exists in debug builds
     const isDebugBuild = typeof pc.Debug?.error === 'function';
     if (!isDebugBuild) return;
 
     try {
-      pc.Tracing.set(pc.TRACEID_SHADER_ALLOC,    true);
+      pc.Tracing.set(pc.TRACEID_SHADER_ALLOC,   true);
       pc.Tracing.set(pc.TRACEID_SHADER_COMPILE,  true);
       pc.Tracing.set(pc.TRACEID_TEXTURE_ALLOC,   true);
       pc.Tracing.set(pc.TRACEID_VRAM_TEXTURE,    true);
       pc.Tracing.set(pc.TRACEID_ASSETS,          true);
       console.log('[NwStats] pc.Tracing activated (debug build detected)');
     } catch (e) {
-      // Older engine build — some IDs may not exist
       console.warn('[NwStats] pc.Tracing partial activation:', e);
     }
   }
 
   // ============================================================================
-  // Material hooks — called from MaterialInstanceLoader
+  // Material hooks
   // ============================================================================
 
   static onMasterRegistered(_name: string): void {
     NwStats.data.materials.masters++;
+    NwStats.sync();
   }
 
   static onInstanceLoadStart(): void {
     NwStats.data.materials.loading++;
+    NwStats.sync();
   }
 
   static onInstanceLoadEnd(): void {
     NwStats.data.materials.loading = Math.max(0, NwStats.data.materials.loading - 1);
+    NwStats.sync();
   }
 
   static onInstanceCreated(masterName: string): void {
     NwStats.data.materials.instances++;
     const prev = NwStats.data.materials.byMaster[masterName] ?? 0;
     NwStats.data.materials.byMaster[masterName] = prev + 1;
+    NwStats.sync();
   }
 
   static onInstanceUnloaded(masterName: string): void {
     NwStats.data.materials.instances = Math.max(0, NwStats.data.materials.instances - 1);
     const prev = NwStats.data.materials.byMaster[masterName] ?? 0;
     NwStats.data.materials.byMaster[masterName] = Math.max(0, prev - 1);
+    NwStats.sync();
   }
 
   // ============================================================================
-  // Texture hooks — called from ProcessedAssetManager
+  // Texture hooks
   // ============================================================================
 
   static onTextureLoadStart(): void {
     NwStats.data.textures.loading++;
+    NwStats.sync();
   }
 
   static onTextureLoadEnd(failed = false): void {
     NwStats.data.textures.loading = Math.max(0, NwStats.data.textures.loading - 1);
-    if (!failed) {
-      NwStats.data.textures.loaded++;
-    }
+    if (!failed) NwStats.data.textures.loaded++;
+    NwStats.sync();
   }
 
   // ============================================================================
-  // LOD hooks — called from LodManager / ProcessedAssetManager
+  // LOD hooks
   // ============================================================================
 
   static setLodTracked(count: number): void {
     NwStats.data.lod.tracked = count;
+    NwStats.sync();
   }
 
   // ============================================================================
@@ -187,10 +202,8 @@ export class NwStats {
   // ============================================================================
 
   /**
-   * Create a MiniStats instance pre-configured with NW graphs.
-   * Requires pc.MiniStats to be available (extras bundle or debug launch).
-   *
-   * @param startSizeIndex 0=small, 1=medium, 2=large
+   * Create MiniStats pre-configured with NW pipeline graphs.
+   * Uses flat key paths (e.g. "nwMatInst") that MiniStats can read directly.
    */
   static createMiniStats(app: pc.Application, startSizeIndex = 1): any {
     const MiniStats = (globalThis as any).pc?.MiniStats;
@@ -202,31 +215,11 @@ export class NwStats {
     return new MiniStats(app, {
       startSizeIndex,
       stats: [
-        {
-          name: 'MatInst',
-          stats: ['nw.materials.instances'],
-          watermark: 200,
-        },
-        {
-          name: 'MatLoad',
-          stats: ['nw.materials.loading'],
-          watermark: 8,
-        },
-        {
-          name: 'TexLoad',
-          stats: ['nw.textures.loading'],
-          watermark: 8,
-        },
-        {
-          name: 'TexDone',
-          stats: ['nw.textures.loaded'],
-          watermark: 500,
-        },
-        {
-          name: 'LOD',
-          stats: ['nw.lod.tracked'],
-          watermark: 100,
-        },
+        { name: 'MatInst',  stats: ['nwMatInst'],    watermark: 200 },
+        { name: 'MatLoad',  stats: ['nwMatLoading'],  watermark: 8   },
+        { name: 'TexLoad',  stats: ['nwTexLoading'],  watermark: 8   },
+        { name: 'TexDone',  stats: ['nwTexLoaded'],   watermark: 500 },
+        { name: 'LOD',      stats: ['nwLodTracked'],  watermark: 100 },
       ],
     });
   }
@@ -235,7 +228,6 @@ export class NwStats {
   // Read
   // ============================================================================
 
-  /** Direct access to stats data (read-only snapshot) */
   static getSnapshot(): NwStatsData {
     return JSON.parse(JSON.stringify(NwStats.data));
   }
