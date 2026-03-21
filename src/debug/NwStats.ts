@@ -249,63 +249,112 @@ export class NwStats {
   static createOverlay(updateRateMs = 1000): () => void {
     document.getElementById('nw-overlay')?.remove();
 
-    const el = document.createElement('div');
-    el.id = 'nw-overlay';
-    Object.assign(el.style, {
+    const root = document.createElement('div');
+    root.id = 'nw-overlay';
+    Object.assign(root.style, {
       position:      'fixed',
       top:           '8px',
       right:         '8px',
       zIndex:        '99999',
-      background:    'rgba(0, 0, 0, 0.82)',
-      color:         '#e8e8e8',
-      font:          'bold 13px/1.6 "Cascadia Code", "Fira Code", Consolas, monospace',
-      padding:       '10px 14px',
-      borderRadius:  '6px',
-      minWidth:      '200px',
+      background:    'rgba(10, 10, 14, 0.88)',
+      color:         '#c8c8d0',
+      font:          '11px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+      padding:       '7px 10px 8px',
+      borderRadius:  '5px',
+      minWidth:      '170px',
       pointerEvents: 'none',
       whiteSpace:    'pre',
-      letterSpacing: '0.02em',
-      borderLeft:    '3px solid #4af',
+      letterSpacing: '0.01em',
+      borderLeft:    '2px solid #38a',
+      boxShadow:     '0 2px 8px rgba(0,0,0,0.5)',
     });
-    document.body.appendChild(el);
+    document.body.appendChild(root);
 
-    const pad = (s: string, n: number) => s.padEnd(n);
-    const sep = '--------------------';
+    // Создаём строки: label-span + value-span для независимой раскраски
+    const rows: Array<{ label: string; key: string; color: string }> = [
+      { label: 'Masters  ', key: 'masters',   color: '#7af' },
+      { label: 'Instances', key: 'instances', color: '#af7' },
+      { label: 'Mat Load ', key: 'matLoad',   color: '#fa7' },
+      { label: 'Tex Done ', key: 'texDone',   color: '#af7' },
+      { label: 'Tex Load ', key: 'texLoad',   color: '#fa7' },
+      { label: 'LOD      ', key: 'lod',       color: '#7af' },
+    ];
+
+    // Header
+    const header = document.createElement('div');
+    header.textContent = 'NW Stats';
+    Object.assign(header.style, { color: '#88aacc', marginBottom: '4px', fontSize: '10px', letterSpacing: '0.05em' });
+    root.appendChild(header);
+
+    // Divider
+    const div0 = document.createElement('div');
+    div0.textContent = ''.padEnd(20, '-');
+    Object.assign(div0.style, { color: '#333', marginBottom: '2px' });
+    root.appendChild(div0);
+
+    // Rows
+    const valueEls: Record<string, HTMLElement> = {};
+    for (const row of rows) {
+      const line = document.createElement('div');
+      const labelEl = document.createElement('span');
+      labelEl.textContent = row.label + ' ';
+      labelEl.style.color = '#888';
+      const valEl = document.createElement('span');
+      valEl.style.color = row.color;
+      valEl.textContent = '0';
+      valueEls[row.key] = valEl;
+      line.appendChild(labelEl);
+      line.appendChild(valEl);
+      root.appendChild(line);
+    }
+
+    // byMaster section
+    const byMasterEl = document.createElement('div');
+    byMasterEl.style.marginTop = '3px';
+    root.appendChild(byMasterEl);
 
     const update = () => {
       const m = NwStats.data.materials;
       const t = NwStats.data.textures;
       const l = NwStats.data.lod;
 
-      const byMaster = Object.entries(m.byMaster)
-        .filter(([, v]) => v > 0)
-        .map(([k, v]) => '  ' + pad(k.slice(0, 14), 14) + ' ' + String(v))
-        .join('\n');
+      valueEls['masters'].textContent   = String(m.masters);
+      valueEls['instances'].textContent = String(m.instances);
+      valueEls['matLoad'].textContent   = String(m.loading);
+      valueEls['texDone'].textContent   = String(t.loaded);
+      valueEls['texLoad'].textContent   = String(t.loading);
+      valueEls['lod'].textContent       = String(l.tracked);
 
-      const lines: string[] = [
-        '== NW Stats ========',
-        pad('Masters',   10) + ' ' + String(m.masters),
-        pad('Instances', 10) + ' ' + String(m.instances),
-        pad('Mat Load',  10) + ' ' + String(m.loading),
-        sep,
-        pad('Tex Loaded', 10) + ' ' + String(t.loaded),
-        pad('Tex Load',   10) + ' ' + String(t.loading),
-        sep,
-        pad('LOD Track',  10) + ' ' + String(l.tracked),
-      ];
-      if (byMaster) {
-        lines.push(sep, byMaster);
+      // Highlight non-zero loading
+      valueEls['matLoad'].style.color = m.loading > 0 ? '#ffa' : '#fa7';
+      valueEls['texLoad'].style.color = t.loading > 0 ? '#ffa' : '#fa7';
+
+      // byMaster breakdown
+      const entries = Object.entries(m.byMaster).filter(([, v]) => v > 0);
+      byMasterEl.innerHTML = '';
+      if (entries.length > 0) {
+        const sep = document.createElement('div');
+        sep.textContent = ''.padEnd(20, '-');
+        sep.style.color = '#333';
+        byMasterEl.appendChild(sep);
+        for (const [k, v] of entries) {
+          const row = document.createElement('div');
+          const lbl = document.createElement('span');
+          lbl.style.color = '#666';
+          lbl.textContent = '  ' + k.slice(0, 12).padEnd(12) + ' ';
+          const val = document.createElement('span');
+          val.style.color = '#af7';
+          val.textContent = String(v);
+          row.appendChild(lbl);
+          row.appendChild(val);
+          byMasterEl.appendChild(row);
+        }
       }
-      el.textContent = lines.join('\n');
     };
 
     update();
     const intervalId = window.setInterval(update, updateRateMs);
-
-    return () => {
-      clearInterval(intervalId);
-      el.remove();
-    };
+    return () => { clearInterval(intervalId); root.remove(); };
   }
 
   // ============================================================================
