@@ -81,6 +81,27 @@ export class NwStats {
     // Mount into app.stats so MiniStats can read it by path 'nw.*'
     (app.stats as any).nw = NwStats.data;
 
+    // Expose globally for console access:
+    //   __NW__.stats       → live counters
+    //   __NW__.app         → pc.Application instance
+    //   __NW__.miniStats() → mount MiniStats overlay
+    (globalThis as any).__NW__ = {
+      stats:     NwStats.data,
+      app,
+      miniStats: (sizeIndex = 1) => NwStats.createMiniStats(app, sizeIndex),
+      tracing:   (channel: string, enabled = true) => {
+        const pc = (globalThis as any).pc;
+        if (pc?.Tracing?.set) {
+          pc.Tracing.set(channel, enabled);
+          console.log(`[NwStats] Tracing ${channel} = ${enabled}`);
+        } else {
+          console.warn('[NwStats] pc.Tracing not available (production build)');
+        }
+      },
+    };
+
+    console.log('[NwStats] Ready. Use __NW__ in console: __NW__.stats, __NW__.miniStats(), __NW__.app');
+
     // Activate PC native tracing if running in a debug build
     NwStats.tryEnablePcTracing();
   }
