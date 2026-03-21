@@ -82,6 +82,7 @@ export class NwStats {
       stats:     NwStats.data,
       app,
       miniStats: (sizeIndex = 1) => NwStats.createMiniStats(app, sizeIndex),
+      overlay:   (rateMs = 1000) => NwStats.createOverlay(rateMs),
       tracing:   (channel: string, enabled = true) => {
         const pc = (globalThis as any).pc;
         if (pc?.Tracing?.set) {
@@ -231,6 +232,83 @@ export class NwStats {
     };
 
     return new MiniStats(app, options);
+  }
+
+  // ============================================================================
+  // Overlay — отдельное окно в правом верхнем углу
+  // ============================================================================
+
+  /**
+   * Создаёт HTML-оверлей в правом верхнем углу с NW-счётчиками.
+   * Обновляется каждые updateRateMs миллисекунд.
+   * Возвращает функцию destroy() для удаления.
+   *
+   * __NW__.overlay()        // создать
+   * __NW__.overlay(500)     // обновление каждые 500мс
+   */
+  static createOverlay(updateRateMs = 1000): () => void {
+    // Удаляем предыдущий если есть
+    document.getElementById('nw-overlay')?.remove();
+
+    const el = document.createElement('div');
+    el.id = 'nw-overlay';
+    Object.assign(el.style, {
+      position:        'fixed',
+      top:             '8px',
+      right:           '8px',
+      zIndex:          '99999',
+      background:      'rgba(0, 0, 0, 0.82)',
+      color:           '#e8e8e8',
+      font:            'bold 13px/1.6 "Cascadia Code", "Fira Code", "Consolas", monospace',
+      padding:         '10px 14px',
+      borderRadius:    '6px',
+      minWidth:        '200px',
+      pointerEvents:   'none',
+      whiteSpace:      'pre',
+      letterSpacing:   '0.02em',
+      textShadow:      '0 1px 2px rgba(0,0,0,0.8)',
+      borderLeft:      '3px solid #4af',
+    });
+    document.body.appendChild(el);
+
+    const fmt = (label: string, val: number, color = '#4af') =>
+      `[0m${label.padEnd(10)} [1m${String(val)}`;
+
+    const update = () => {
+      const m = NwStats.data.materials;
+      const t = NwStats.data.textures;
+      const l = NwStats.data.lod;
+
+      const byMaster = Object.entries(m.byMaster)
+        .filter(([, v]) => v > 0)
+        .map(([k, v]) => `  ${k.slice(0, 14).padEnd(14)} ${v}`)
+        .join('
+');
+
+      el.textContent = [
+        '── NW Stats ────────',
+        `Masters    ${m.masters}`,
+        `Instances  ${m.instances}`,
+        `Mat Load   ${m.loading}`,
+        '────────────────────',
+        `Tex Loaded ${t.loaded}`,
+        `Tex Load   ${t.loading}`,
+        '────────────────────',
+        `LOD Track  ${l.tracked}`,
+        ...(byMaster ? ['────────────────────', byMaster] : []),
+      ].join('
+');
+    };
+
+    update();
+    const intervalId = window.setInterval(update, updateRateMs);
+
+    const destroy = () => {
+      clearInterval(intervalId);
+      el.remove();
+    };
+
+    return destroy;
   }
 
   // ============================================================================
