@@ -1,6 +1,6 @@
 {
   "name": "pc-gameframework",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "author": "SashaRX",
   "description": "PlayCanvas Game Framework - KTX2 streaming, meshopt, materials, cubemaps, postfx",
   "keywords": [
