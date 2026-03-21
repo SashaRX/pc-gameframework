@@ -206,22 +206,31 @@ export class NwStats {
    * Uses flat key paths (e.g. "nwMatInst") that MiniStats can read directly.
    */
   static createMiniStats(app: pc.Application, startSizeIndex = 1): any {
-    const MiniStats = (globalThis as any).pc?.MiniStats;
+    const pc = (globalThis as any).pc;
+    const MiniStats = pc?.MiniStats;
     if (!MiniStats) {
       console.warn('[NwStats] pc.MiniStats not available — skipped');
       return null;
     }
 
-    return new MiniStats(app, {
+    // Start from default options (cpu, gpu, sizes etc.) to avoid initGraphs crash,
+    // then append our custom NW graphs on top
+    const defaults = MiniStats.getDefaultOptions?.() ?? {};
+    const nwGraphs = [
+      { name: 'MatInst',  stats: ['nwMatInst'],    watermark: 200 },
+      { name: 'MatLoad',  stats: ['nwMatLoading'],  watermark: 8   },
+      { name: 'TexLoad',  stats: ['nwTexLoading'],  watermark: 8   },
+      { name: 'TexDone',  stats: ['nwTexLoaded'],   watermark: 500 },
+      { name: 'LOD',      stats: ['nwLodTracked'],  watermark: 100 },
+    ];
+
+    const options = {
+      ...defaults,
       startSizeIndex,
-      stats: [
-        { name: 'MatInst',  stats: ['nwMatInst'],    watermark: 200 },
-        { name: 'MatLoad',  stats: ['nwMatLoading'],  watermark: 8   },
-        { name: 'TexLoad',  stats: ['nwTexLoading'],  watermark: 8   },
-        { name: 'TexDone',  stats: ['nwTexLoaded'],   watermark: 500 },
-        { name: 'LOD',      stats: ['nwLodTracked'],  watermark: 100 },
-      ],
-    });
+      stats: [...(defaults.stats ?? []), ...nwGraphs],
+    };
+
+    return new MiniStats(app, options);
   }
 
   // ============================================================================
