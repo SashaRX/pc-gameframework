@@ -65,6 +65,7 @@ export { Ktx2LoaderScript } from './scripts/Ktx2LoaderScript';
 export { StreamingManagerScript } from './scripts/StreamingManagerScript';
 export { StreamedTextureScript } from './scripts/StreamedTextureScript';
 export { ProcessedAssetScript } from './scripts/ProcessedAssetScript';
+export { NwDebugScript } from './scripts/NwDebugScript';
 export { StreamedModelScript } from './scripts/StreamedModelScript';
 
 // Register scripts
@@ -72,6 +73,7 @@ import './scripts/Ktx2LoaderScript';
 import './scripts/StreamingManagerScript';
 import './scripts/StreamedTextureScript';
 import './scripts/ProcessedAssetScript';
+import './scripts/NwDebugScript';
 import './scripts/StreamedModelScript';
 
 // ============================================================================
