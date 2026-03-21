@@ -247,32 +247,30 @@ export class NwStats {
    * __NW__.overlay(500)     // обновление каждые 500мс
    */
   static createOverlay(updateRateMs = 1000): () => void {
-    // Удаляем предыдущий если есть
     document.getElementById('nw-overlay')?.remove();
 
     const el = document.createElement('div');
     el.id = 'nw-overlay';
     Object.assign(el.style, {
-      position:        'fixed',
-      top:             '8px',
-      right:           '8px',
-      zIndex:          '99999',
-      background:      'rgba(0, 0, 0, 0.82)',
-      color:           '#e8e8e8',
-      font:            'bold 13px/1.6 "Cascadia Code", "Fira Code", "Consolas", monospace',
-      padding:         '10px 14px',
-      borderRadius:    '6px',
-      minWidth:        '200px',
-      pointerEvents:   'none',
-      whiteSpace:      'pre',
-      letterSpacing:   '0.02em',
-      textShadow:      '0 1px 2px rgba(0,0,0,0.8)',
-      borderLeft:      '3px solid #4af',
+      position:      'fixed',
+      top:           '8px',
+      right:         '8px',
+      zIndex:        '99999',
+      background:    'rgba(0, 0, 0, 0.82)',
+      color:         '#e8e8e8',
+      font:          'bold 13px/1.6 "Cascadia Code", "Fira Code", Consolas, monospace',
+      padding:       '10px 14px',
+      borderRadius:  '6px',
+      minWidth:      '200px',
+      pointerEvents: 'none',
+      whiteSpace:    'pre',
+      letterSpacing: '0.02em',
+      borderLeft:    '3px solid #4af',
     });
     document.body.appendChild(el);
 
-    const fmt = (label: string, val: number, color = '#4af') =>
-      `[0m${label.padEnd(10)} [1m${String(val)}`;
+    const pad = (s: string, n: number) => s.padEnd(n);
+    const sep = '--------------------';
 
     const update = () => {
       const m = NwStats.data.materials;
@@ -281,34 +279,33 @@ export class NwStats {
 
       const byMaster = Object.entries(m.byMaster)
         .filter(([, v]) => v > 0)
-        .map(([k, v]) => `  ${k.slice(0, 14).padEnd(14)} ${v}`)
-        .join('
-');
+        .map(([k, v]) => '  ' + pad(k.slice(0, 14), 14) + ' ' + String(v))
+        .join('\n');
 
-      el.textContent = [
-        '── NW Stats ────────',
-        `Masters    ${m.masters}`,
-        `Instances  ${m.instances}`,
-        `Mat Load   ${m.loading}`,
-        '────────────────────',
-        `Tex Loaded ${t.loaded}`,
-        `Tex Load   ${t.loading}`,
-        '────────────────────',
-        `LOD Track  ${l.tracked}`,
-        ...(byMaster ? ['────────────────────', byMaster] : []),
-      ].join('
-');
+      const lines: string[] = [
+        '== NW Stats ========',
+        pad('Masters',   10) + ' ' + String(m.masters),
+        pad('Instances', 10) + ' ' + String(m.instances),
+        pad('Mat Load',  10) + ' ' + String(m.loading),
+        sep,
+        pad('Tex Loaded', 10) + ' ' + String(t.loaded),
+        pad('Tex Load',   10) + ' ' + String(t.loading),
+        sep,
+        pad('LOD Track',  10) + ' ' + String(l.tracked),
+      ];
+      if (byMaster) {
+        lines.push(sep, byMaster);
+      }
+      el.textContent = lines.join('\n');
     };
 
     update();
     const intervalId = window.setInterval(update, updateRateMs);
 
-    const destroy = () => {
+    return () => {
       clearInterval(intervalId);
       el.remove();
     };
-
-    return destroy;
   }
 
   // ============================================================================
